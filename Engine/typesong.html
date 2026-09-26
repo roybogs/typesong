@@ -714,16 +714,16 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   }
 
   // Music stats for the Mac app's health log (pitches only, never text): lets repetition be spotted without listening.
-  let noteLog = [], beatCount = 0;
+  let noteLog = [], beatCount = 0; const heardChats = new Set();
   function musicStats(){
     const n = noteLog.length;
-    let stats = {notes:n, beats:beatCount};
+    let stats = {notes:n, beats:beatCount, chats:working.size, heard:heardChats.size};   // chats: mid-turn now; heard: sent events this window
     if (n){
       const counts = {}; let run=1, maxRun=1;
       noteLog.forEach((m,i)=>{ counts[m]=(counts[m]||0)+1; if (i && m===noteLog[i-1]){ run++; maxRun=Math.max(maxRun,run); } else run=1; });
       stats = {...stats, pitches:Object.keys(counts).length, top:+(Math.max(...Object.values(counts))/n).toFixed(2), maxRun, range:Math.max(...noteLog)-Math.min(...noteLog)};
     }
-    noteLog = []; beatCount = 0;
+    noteLog = []; beatCount = 0; heardChats.clear();
     return stats;
   }
   function play(ch, kind, o={}){
@@ -1067,15 +1067,22 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   }
   // While the agent works (prompt → stop), soft notes every couple of seconds say "still working" even when
   // no hook events arrive (long thinking or writing with no tool calls). Gives up after 10 quiet minutes.
-  let agentWorking = false, agentLastEv = 0, pulseDue = 0, pulseVoice = {};
+  // Each chat that is mid-turn is tracked on its own, so one chat finishing doesn't silence the others, and a
+  // chat already working when you switch agent music on joins as soon as it does anything.
+  let agentWorking = false, pulseDue = 0, pulseVoice = {}, pulseTurn = 0;
+  const working = new Map();   // session → {voice, last}
   function workPulse(){
     if (!agentWorking) return;
     const t = performance.now();
-    if (t - agentLastEv > 600000){ agentWorking = false; return; }
+    for (const [id,w] of working) if (t - w.last > 600000) working.delete(id);   // quiet 10 min: gave up
+    agentWorking = working.size > 0;
+    if (!agentWorking) return;
     if (t < pulseDue || agentBusy) return;
     // Short phrases with rests between, each one made fresh (length, shape, rhythm) and never a repeat of the
     // last several, so long waits sound like a tune idling rather than a loop. Phrases lean back toward the middle.
     if (!pulsePhrase.length){
+      const ws = [...working.values()];                 // take turns between working chats, phrase by phrase
+      pulseVoice = ws[(pulseTurn++) % ws.length].voice;
       const span = style.span || style.scale.length*2, mid = span/2;
       const lean = gpos>mid+3 ? -1 : gpos<mid-3 ? 1 : 0;
       for (let tries=0; tries<20; tries++){
@@ -1118,13 +1125,17 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   const wordStep = w => { const end=w[w.length-1]; if (end==='.'||end==='!') return -3; if (end==='?') return 3; return [-4,-3,-2,-1,1,2,3,4][hash(w.toLowerCase())%8]; };   // never 0, so a word never repeats the last note
   function agentEvent(ev){
     if (!ev || !ev.type) return;
+    if (ev.session) heardChats.add(ev.session);
     if (ev.type==='prompt' && ev.session) focusSession = ev.session;
     if (!focusSession && ev.session) focusSession = ev.session;
     if (agentScope==='focus' && ev.session && ev.session!==focusSession && ev.type!=='notify') return;
     const voice = sessionVoice(ev.session);
-    agentLastEv = performance.now();
-    if (ev.type==='prompt'){ agentWorking = true; pulseVoice = voice; pulseDue = performance.now()+2500; }
-    if (ev.type==='stop') agentWorking = false;
+    const sid = ev.session || '-', wasIdle = !working.size;
+    if (ev.type==='prompt' && agentScope==='focus') working.clear();   // focus: only the new chat counts now
+    if (ev.type==='stop') working.delete(sid);
+    else if (ev.type!=='notify') working.set(sid, {voice, last: performance.now()});
+    agentWorking = working.size > 0;
+    if (agentWorking && wasIdle) pulseDue = performance.now() + 2500;
     if (ev.type==='prompt'){ agentQ.length=0; agentQ.push({k:'enter'}); }
     else if (ev.type==='text' || ev.type==='thinking'){
       let words = String(ev.text||'').split(/\s+/).filter(w=>/[a-z0-9]/i.test(w));
@@ -1226,7 +1237,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       setVisible,
       resetAudio,
       agent: agentEvent,
-      setAgentScope: sc => { agentScope = sc==='all' ? 'all' : 'focus'; },
+      setAgentScope: sc => { agentScope = sc==='all' ? 'all' : 'focus'; if (agentScope==='focus') for (const id of working.keys()) if (id!==focusSession) working.delete(id); },
       tick: (()=>{ let n=0; return ()=>{ schedTick(); if (++n % 5 === 0) slowTick(); }; })(),   // called every 25 ms by the app
     };
     // health goes to the app's log from slowTick every ~5 s while awake: scheduler ticks (expect ~200) and audio state

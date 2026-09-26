@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "health":
             let ticks = body["ticks"] as? Int ?? 0, audio = body["audio"] as? String ?? "?", t = body["t"] as? Double ?? 0
             let m = body["music"] as? [String: Any] ?? [:]
-            let music = ["notes", "pitches", "top", "maxRun", "range", "beats"].compactMap { k in m[k].map { "\(k)=\($0)" } }.joined(separator: " ")
+            let music = ["notes", "pitches", "top", "maxRun", "range", "beats", "chats", "heard"].compactMap { k in m[k].map { "\(k)=\($0)" } }.joined(separator: " ")
             HealthLog.write("ticks/5s=\(ticks) audio=\(audio) clock=\(t) style=\(currentStyle) listening=\(tap != nil) paused=\(paused) agentEvents=\(agentEvents) | \(music)")
         default: break
         }
