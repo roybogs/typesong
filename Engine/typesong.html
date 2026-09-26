@@ -1150,11 +1150,14 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       // "Done" should sound when the agent finishes, not after its reply's words play out: drop anything still
       // queued (the reply text only arrives with the stop anyway) and resolve on the chord right now.
       // Then the reply's words play out after it as a short outro (capped), which keeps the fuller ending.
-      const coda = agentQ.filter(it => it.k==='word' && !it.soft).slice(-24);
+      // Kept short (≈2 s): a long reply's full outro ran on well past "done".
+      const words = agentQ.filter(it => it.k==='word' && !it.soft);
+      const coda = words.length > 6 ? Array.from({length:6}, (_,i)=>words[Math.floor(i*words.length/6)]) : words;
+      coda.forEach(it => it.soft = true);   // soft = one quiet note per word, no ornaments or beats
       agentQ.length = 0;
       input('\n','enter');
       spark(.5,.5,'chord');
-      if (coda.length){ agentQ.push({k:'rest', ms:900}, ...coda); if (!agentBusy) agentPump(); }
+      if (coda.length){ agentQ.push({k:'rest', ms:700}, ...coda); if (!agentBusy) agentPump(); }
       return;
     }
     if (agentQ.length > 160) agentQ.splice(0, agentQ.length-80);   // fell behind: skip ahead
