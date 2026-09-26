@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var tipURL: URL?   // set by the engine page; the menu shows "Leave a tip" only when it exists
     private var muted = false
     private var paused = false
-    private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? true
+    private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? false   // Beta: off until chosen
     private var agentServer: AgentServer?
     private var agentScope = UserDefaults.standard.string(forKey: "agentScope") ?? "focus"   // "focus" or "all"
     private var pendingAgent: [[String: Any]] = []
@@ -163,6 +163,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         UserDefaults.standard.set(agentOn, forKey: "agentMode")
         if agentOn { agentServer?.start() } else { agentServer?.stop() }
         refreshIcon()
+        if agentOn && !Hook.isInstalled(command: hookCommand) { DispatchQueue.main.async { self.setUpClaude() } }
+    }
+
+    // The hook is this app run with --hook, so it works without Python or a copy of the repo.
+    private var hookCommand: String { "\"\(Bundle.main.executablePath ?? "/Applications/Typesong.app/Contents/MacOS/Typesong")\" --hook" }
+
+    @objc private func setUpClaude() {
+        NSApp.activate(ignoringOtherApps: true)
+        let ask = NSAlert()
+        ask.messageText = "Connect Claude Code to Typesong?"
+        ask.informativeText = "Typesong will add a few hooks to ~/.claude/settings.json so Claude Code can tell it when it's working, using tools and done. Your other settings stay as they are, and a backup is saved next to the file.\n\nChats you start after this will play. Chats already open need a restart."
+        ask.addButton(withTitle: "Connect")
+        ask.addButton(withTitle: "Cancel")
+        guard ask.runModal() == .alertFirstButtonReturn else { return }
+        let done = NSAlert()
+        do {
+            _ = try Hook.install(command: hookCommand)
+            done.messageText = "Claude Code is connected"
+            done.informativeText = "Start a new Claude Code chat and it will play while it works."
+        } catch {
+            done.alertStyle = .warning
+            done.messageText = "Couldn't connect Claude Code"
+            done.informativeText = error.localizedDescription
+        }
+        done.runModal()
     }
 
     // MARK: Keyboard listener
@@ -304,10 +329,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         mute.keyEquivalentModifierMask = [.command, .option, .control]
         menu.addItem(mute)
         menu.addItem(item(paused ? "Resume listening to my typing" : "Pause listening to my typing", #selector(togglePause)))
-        let agent = item("Agent music (Claude Code)", #selector(toggleAgent))
+        let agent = item("Agent music for Claude Code (Beta)", #selector(toggleAgent))
         agent.state = agentOn ? .on : .off
         menu.addItem(agent)
         if agentOn {
+            let setUp = Hook.isInstalled(command: hookCommand)
+            let setup = item(setUp ? "Claude Code is connected ✓" : "Connect Claude Code…", #selector(setUpClaude))
+            setup.indentationLevel = 1
+            menu.addItem(setup)
             for (scope, title) in [("focus", "Only my latest chat"), ("all", "All chats, each in its own spot")] {
                 let i = item(title, #selector(pickAgentScope(_:)))
                 i.representedObject = scope
@@ -447,6 +476,8 @@ enum HealthLog {
         }
     }
 }
+
+if CommandLine.arguments.contains("--hook") { Hook.run() }   // Claude Code hook mode: no UI, exits right away
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

@@ -131,3 +131,72 @@ fn post(events: &[Value]) {
         let _ = s.read(&mut sink);
     }
 }
+
+// MARK: setup
+
+const EVENTS: [&str; 7] = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop", "Notification"];
+
+fn settings_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    Some(std::path::PathBuf::from(home).join(".claude").join("settings.json"))
+}
+
+/// The command Claude Code runs: this app with --hook. An AppImage runs from a temporary mount that changes
+/// every launch, so point at the AppImage file itself.
+pub fn command() -> Option<String> {
+    let exe = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from).or_else(|| std::env::current_exe().ok())?;
+    Some(format!("\"{}\" --hook", exe.display()))
+}
+
+pub fn is_installed() -> bool {
+    let (Some(p), Some(cmd)) = (settings_path(), command()) else { return false };
+    let Ok(text) = fs::read_to_string(p) else { return false };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return false };
+    EVENTS.iter().all(|e| {
+        v["hooks"][*e].as_array().map_or(false, |gs| gs.iter().any(|g| g["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str() == Some(cmd.as_str())))))
+    })
+}
+
+/// Adds (or refreshes) Typesong's hooks in ~/.claude/settings.json. Keeps every other setting and hook, replaces
+/// only earlier Typesong entries, and saves the original file once as settings.json.before-typesong.
+pub fn install() -> Result<(), String> {
+    let path = settings_path().ok_or("no home folder")?;
+    let cmd = command().ok_or("can't find the Typesong program")?;
+    let mut settings = json!({});
+    if let Ok(text) = fs::read_to_string(&path) {
+        if !text.trim().is_empty() {
+            settings = serde_json::from_str::<Value>(&text).map_err(|_| "~/.claude/settings.json isn't valid JSON, so it was left alone")?;
+            if !settings.is_object() {
+                return Err("~/.claude/settings.json isn't a JSON object, so it was left alone".into());
+            }
+            let backup = path.with_extension("json.before-typesong");
+            if !backup.exists() {
+                fs::write(&backup, &text).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    let ours = |h: &Value| {
+        let c = h["command"].as_str().unwrap_or("");
+        c.contains("claude-hook.py") || c.ends_with("--hook") && c.to_lowercase().contains("typesong")
+    };
+    let hooks = settings.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({}));
+    if !hooks.is_object() {
+        *hooks = json!({});
+    }
+    for ev in EVENTS {
+        let mut groups: Vec<Value> = hooks[ev].as_array().cloned().unwrap_or_default().into_iter().filter_map(|mut g| {
+            let kept: Vec<Value> = g["hooks"].as_array().cloned().unwrap_or_default().into_iter().filter(|h| !ours(h)).collect();
+            if kept.is_empty() { return None; }
+            g["hooks"] = Value::Array(kept);
+            Some(g)
+        }).collect();
+        groups.push(json!({"hooks": [{"type": "command", "command": cmd, "async": true, "timeout": 2}]}));
+        hooks[ev] = Value::Array(groups);
+    }
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.typesong-tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}

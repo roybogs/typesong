@@ -53,6 +53,19 @@ jobs:
           Write-Host "---- health.log ----"
           Get-Content $log
 
+      - name: Connect Claude Code (settings merge keeps other settings, no duplicates)
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "desktop/src-tauri/target/release/typesong.exe"
+          $env:USERPROFILE = Join-Path $env:RUNNER_TEMP "home"; New-Item -ItemType Directory -Force "$env:USERPROFILE/.claude" | Out-Null
+          '{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' | Set-Content "$env:USERPROFILE/.claude/settings.json"
+          & $exe --connect-claude | Write-Host; & $exe --connect-claude | Write-Host
+          $s = Get-Content "$env:USERPROFILE/.claude/settings.json" -Raw | ConvertFrom-Json
+          $stop = @($s.hooks.Stop | ForEach-Object { $_.hooks } | ForEach-Object { $_.command })
+          Write-Host ($stop -join ' | ')
+          if ($s.model -ne "x" -or $stop.Count -ne 2 -or -not ($stop -contains "echo mine") -or @($s.hooks.PSObject.Properties).Count -ne 7) { Write-Host "::error::settings merge wrong"; exit 1 }
+          if (-not (Test-Path "$env:USERPROFILE/.claude/settings.json.before-typesong")) { Write-Host "::error::no backup"; exit 1 }
+
       - name: Check self-test results
         shell: pwsh
         run: |

@@ -35,6 +35,7 @@ struct Shared {
     muted: AtomicBool,
     paused: AtomicBool,
     agent_on: AtomicBool,
+    connect_error: Mutex<Option<String>>,
     listening: AtomicBool,
     clock_on: AtomicBool,
     page_ready: AtomicBool,
@@ -48,6 +49,14 @@ struct Shared {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--connect-claude") {
+        // Same as the tray's "Connect Claude Code"; used by CI to test the settings merge.
+        match hook::install() {
+            Ok(()) => println!("connected: {}", hook::is_installed()),
+            Err(e) => println!("connect failed: {e}"),
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--hook") {
         hook::run();
         return;
@@ -61,7 +70,7 @@ fn main() {
 
     let settings = log::load_settings();
     let shared = Shared::default();
-    shared.agent_on.store(settings["agentOn"].as_bool().unwrap_or(true), Relaxed);
+    shared.agent_on.store(settings["agentOn"].as_bool().unwrap_or(false), Relaxed);
     *shared.scope.lock().unwrap() = settings["agentScope"].as_str().unwrap_or("focus").to_string();
     *shared.style.lock().unwrap() = "lofi".into();
     shared.selftest.store(selftest, Relaxed);
@@ -420,7 +429,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let header = MenuItem::with_id(app, "status", status, false, None::<&str>)?;
     let mute = CheckMenuItem::with_id(app, "mute", "Mute (Ctrl+Alt+Shift+M)", true, muted, None::<&str>)?;
     let pause = CheckMenuItem::with_id(app, "pause", "Pause listening to my typing", true, paused, None::<&str>)?;
-    let agent_item = CheckMenuItem::with_id(app, "agent", "Agent music (Claude Code)", true, agent, None::<&str>)?;
+    let agent_item = CheckMenuItem::with_id(app, "agent", "Agent music for Claude Code (Beta)", true, agent, None::<&str>)?;
+    let connected = hook::is_installed();
+    let connect_label = match st.connect_error.lock().unwrap().clone() {
+        Some(e) => format!("    Couldn't connect Claude Code: {e}"),
+        None if connected => "    Claude Code is connected ✓".to_string(),
+        None => "    Connect Claude Code (adds hooks to ~/.claude/settings.json)".to_string(),
+    };
+    let connect = MenuItem::with_id(app, "connect", connect_label, agent && !connected, None::<&str>)?;
     let focus = CheckMenuItem::with_id(app, "scope_focus", "    Only my latest chat", agent, scope == "focus", None::<&str>)?;
     let all = CheckMenuItem::with_id(app, "scope_all", "    All chats, each in its own spot", agent, scope == "all", None::<&str>)?;
     let style_items: Vec<CheckMenuItem<Wry>> = STYLES
@@ -446,7 +462,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     if cfg!(target_os = "linux") && !st.listening.load(Relaxed) && !st.selftest.load(Relaxed) {
         items.push(&keyboard_hint);
     }
-    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &focus, &all, &styles, &show]);
+    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &connect, &focus, &all, &styles, &show]);
     if has_tip {
         items.push(&tip);
     }
@@ -486,6 +502,9 @@ fn on_menu(app: &AppHandle, id: &str) {
         "agent" => {
             st.agent_on.fetch_xor(true, Relaxed);
             save_settings(app);
+        }
+        "connect" => {
+            *st.connect_error.lock().unwrap() = hook::install().err();
         }
         "scope_focus" | "scope_all" => {
             let scope = if id == "scope_all" { "all" } else { "focus" };

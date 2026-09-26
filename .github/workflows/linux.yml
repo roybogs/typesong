@@ -57,6 +57,16 @@ jobs:
           echo "---- app output ----"; grep -v "AT-SPI" app-output.txt | tail -40
           exit 0
 
+      - name: Connect Claude Code (settings merge keeps other settings, no duplicates)
+        run: |
+          exe="$PWD/desktop/src-tauri/target/release/typesong"
+          export HOME="$(mktemp -d)"; mkdir -p "$HOME/.claude"
+          echo '{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"
+          "$exe" --connect-claude; "$exe" --connect-claude
+          cat "$HOME/.claude/settings.json"
+          jq -e '.model=="x" and ([.hooks.Stop[].hooks[].command] | length==2 and index("echo mine")!=null) and (.hooks|length==7)' "$HOME/.claude/settings.json"
+          test -f "$HOME/.claude/settings.json.before-typesong"
+
       - name: Check self-test results
         run: |
           log="$HOME/.local/share/Typesong/health.log"

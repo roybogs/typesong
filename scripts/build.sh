@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 IDENTITY="${TYPESONG_SIGN_IDENTITY:-Apple Development: 1mendozamiguel@gmail.com (9Y3KQJS852)}"
 BUNDLE_ID="com.miguelmendoza.typesong"
-VERSION="0.1.0"
+VERSION="${TYPESONG_VERSION:-0.1.0}"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
 APP="build/Typesong.app"
 
@@ -48,6 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --options runtime --sign "$IDENTITY" "$APP"
+# Release builds need a secure timestamp for notarization (TYPESONG_TIMESTAMP=1, set by release.sh).
+codesign --force --options runtime ${TYPESONG_TIMESTAMP:+--timestamp} --sign "$IDENTITY" "$APP"
 codesign --verify --strict "$APP"
 echo "Built $APP  version ${VERSION} (${BUILD_NUMBER})  engine ${ENGINE_SHA}"
