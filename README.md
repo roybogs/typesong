@@ -6,6 +6,10 @@ beat, and your speed sets the energy. Stop typing and it settles.
 Typesong lives in your menu bar (or system tray) and plays along with whatever you type, in any app.
 It's free, and it stays free.
 
+https://github.com/user-attachments/assets/ed112963-0f5a-4fe1-963c-dc349358643a
+
+*Sound on: every note in this video is Typesong itself, playing the keys you see typed.*
+
 ## Sounds
 
 Seven styles: **Lofi**, **Late night**, **Ambient** (bells, glass or hum), **Ethereal**, **Rainfall**,
