@@ -55,6 +55,9 @@ button.warn{border-color:var(--burst);color:var(--burst)}
 .legend div{display:flex;gap:10px;align-items:baseline}
 kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;border:1px solid var(--line);border-bottom-width:2px;background:var(--surface);color:var(--ink);white-space:nowrap}
 .privacy{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
+.tipline{font-size:13px;color:var(--muted);margin:-12px 0 0}
+.tipline a{color:var(--accent);font-weight:600;text-decoration:none}
+.tipline a:hover,.tipline a:focus-visible{text-decoration:underline}
 @media (prefers-reduced-motion: reduce){.meter,.pill i{transition:none}}
 </style>
 
@@ -124,10 +127,12 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   <div class="legend" id="legend"></div>
 
   <p class="privacy">Everything runs in this page. Your text is kept only in this browser as a draft, and it is never sent anywhere. The music reacts only to which key and when.</p>
+  <p class="tipline" id="tipRow" hidden>Typesong is free, always. If it makes your day nicer, <a id="tipLink" href="#" target="_blank" rel="noopener">leave a tip</a>.</p>
 </div>
 
 <script>
 (() => {
+  const TIP_URL = '';   // Ko-fi page, e.g. https://ko-fi.com/yourname
   const $ = id => document.getElementById(id);
   const hz = m => 440*Math.pow(2,(m-69)/12);
   const pc = m => ((m%12)+12)%12;
@@ -1156,7 +1161,16 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   // nothing typed is stored or sent anywhere.
   const macHost = window.TYPESONG_HOST === 'mac';
   function hostPost(extra){
-    try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'state', style:styleKey, muted, ...extra}); } catch(e){}
+    try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'state', style:styleKey, muted, tipURL: TIP_URL, ...extra}); } catch(e){}
+  }
+  // The tip jar link: the one place it's set. Empty keeps every tip link hidden (page and app menus).
+  if (TIP_URL){
+    const a = $('tipLink'); a.href = TIP_URL; $('tipRow').hidden = false;
+    a.addEventListener('click', e => {   // in the desktop apps, open the system browser instead of the hidden view
+      if (!window.webkit?.messageHandlers?.typesong) return;
+      e.preventDefault();
+      try { window.webkit.messageHandlers.typesong.postMessage({type:'openURL', url: TIP_URL}); } catch(err){}
+    });
   }
   if (macHost){
     document.documentElement.classList.add('mac-host');

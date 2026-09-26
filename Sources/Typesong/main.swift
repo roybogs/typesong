@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var clock: Timer?
 
     private var currentStyle = "lofi"
+    private var tipURL: URL?   // set by the engine page; the menu shows "Leave a tip" only when it exists
     private var muted = false
     private var paused = false
     private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? true
@@ -92,7 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "state":
             if let s = body["style"] as? String { currentStyle = s }
             if let m = body["muted"] as? Bool { muted = m }
+            if let t = body["tipURL"] as? String { tipURL = Self.safeLink(t) }
             refreshIcon()
+        case "openURL":
+            if let t = body["url"] as? String, let url = Self.safeLink(t) { NSWorkspace.shared.open(url) }
         case "audioReset":
             HealthLog.write("audio reset: \(body["reason"] as? String ?? "?")")
         case "sleep":
@@ -325,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(styleItem)
 
         menu.addItem(item("Show Typesong window", #selector(showWindowAction)))
+        if tipURL != nil { menu.addItem(item("Leave a tip ♥", #selector(openTip))) }
         menu.addItem(.separator())
         menu.addItem(item("Quit Typesong", #selector(quit)))
     }
@@ -361,6 +366,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     @objc private func showWindowAction() { showWindow() }
+
+    @objc private func openTip() { if let tipURL { NSWorkspace.shared.open(tipURL) } }
+
+    /// Only plain https links leave the app.
+    private static func safeLink(_ s: String) -> URL? {
+        guard let url = URL(string: s), url.scheme == "https", url.host != nil else { return nil }
+        return url
+    }
 
     private func showWindow() {
         NSApp.setActivationPolicy(.regular)

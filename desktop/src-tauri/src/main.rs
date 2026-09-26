@@ -43,6 +43,7 @@ struct Shared {
     style: Mutex<String>,
     scope: Mutex<String>,
     pending: Mutex<Vec<String>>,
+    tip_url: Mutex<Option<String>>,
 }
 
 fn main() {
@@ -200,7 +201,15 @@ fn page_message(app: AppHandle, msg: Value) {
             if let Some(m) = msg["muted"].as_bool() {
                 st.muted.store(m, Relaxed);
             }
+            if let Some(t) = msg["tipURL"].as_str() {
+                *st.tip_url.lock().unwrap() = safe_link(t).map(str::to_string);
+            }
             refresh_tray(&app);
+        }
+        "openURL" => {
+            if let Some(url) = msg["url"].as_str().and_then(safe_link) {
+                open_link(url);
+            }
         }
         "health" => {
             let m = &msg["music"];
@@ -227,6 +236,22 @@ fn page_message(app: AppHandle, msg: Value) {
         "wake" => wake(&app),
         "audioReset" => log::write(&format!("audio reset: {}", msg["reason"].as_str().unwrap_or("?"))),
         _ => {}
+    }
+}
+
+/// Only plain https links leave the app.
+fn safe_link(s: &str) -> Option<&str> {
+    (s.starts_with("https://") && s.len() > 8 && !s.chars().any(|c| c.is_whitespace() || c == '"')).then_some(s)
+}
+
+/// Opens a link in the system browser.
+fn open_link(url: &str) {
+    #[cfg(windows)]
+    let result = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
+    #[cfg(not(windows))]
+    let result = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(e) = result {
+        log::write(&format!("could not open link: {e}"));
     }
 }
 
@@ -405,6 +430,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let style_refs: Vec<&dyn IsMenuItem<Wry>> = style_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
     let styles = Submenu::with_id_and_items(app, "style", "Style", true, &style_refs)?;
     let show = MenuItem::with_id(app, "show", "Show Typesong window", true, None::<&str>)?;
+    let tip = MenuItem::with_id(app, "tip", "Leave a tip ♥", true, None::<&str>)?;
+    let has_tip = st.tip_url.lock().unwrap().is_some();
     let quit = MenuItem::with_id(app, "quit", "Quit Typesong", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -419,7 +446,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     if cfg!(target_os = "linux") && !st.listening.load(Relaxed) && !st.selftest.load(Relaxed) {
         items.push(&keyboard_hint);
     }
-    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &focus, &all, &styles, &show, &sep2, &quit]);
+    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &focus, &all, &styles, &show]);
+    if has_tip {
+        items.push(&tip);
+    }
+    items.extend([&sep2 as &dyn IsMenuItem<Wry>, &quit]);
     Menu::with_items(app, &items)
 }
 
@@ -470,6 +501,11 @@ fn on_menu(app: &AppHandle, id: &str) {
             js(app, "typesongHost.setVisible(true)");
         }
         "quit" => app.exit(0),
+        "tip" => {
+            if let Some(url) = st.tip_url.lock().unwrap().clone() {
+                open_link(&url);
+            }
+        }
         _ => {
             if let Some(k) = id.strip_prefix("style_") {
                 *st.style.lock().unwrap() = k.to_string();
