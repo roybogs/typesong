@@ -1,0 +1,6 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+*.bak
+__pycache__/
