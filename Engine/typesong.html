@@ -1108,7 +1108,14 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     else if (ev.type==='tool') agentQ.push({k:'tool', t:String(ev.tool||'tool'), voice});
     else if (ev.type==='tool_error') agentQ.push({k:'error'});
     else if (ev.type==='notify') agentQ.push({k:'notify'});
-    else if (ev.type==='stop') agentQ.push({k:'stop'});
+    else if (ev.type==='stop'){
+      // "Done" should sound when the agent finishes, not after its reply's words play out: drop anything still
+      // queued (the reply text only arrives with the stop anyway) and resolve on the chord right now.
+      agentQ.length = 0;
+      input('\n','enter');
+      spark(.5,.5,'chord');
+      return;
+    }
     if (agentQ.length > 160) agentQ.splice(0, agentQ.length-80);   // fell behind: skip ahead
     if (!agentBusy) agentPump();
   }
