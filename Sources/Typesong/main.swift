@@ -158,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         agentOn.toggle()
         UserDefaults.standard.set(agentOn, forKey: "agentMode")
         if agentOn { agentServer?.start() } else { agentServer?.stop() }
+        refreshIcon()
     }
 
     // MARK: Keyboard listener
@@ -243,11 +244,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         refreshIcon()
     }
 
+    // ♪ = your typing plays · ♪ with a sparkle = agent music is on · mute = muted, or nothing can play
+    // (typing paused and agent music off) · triangle = keyboard permission missing.
     private func refreshIcon() {
         guard let button = statusItem?.button else { return }
-        let name = tap == nil ? "exclamationmark.triangle" : (muted || paused) ? "speaker.slash" : "music.note"
-        button.image = NSImage(systemSymbolName: name, accessibilityDescription: "Typesong")
+        if muted || (paused && !agentOn) {
+            button.image = NSImage(systemSymbolName: "speaker.slash", accessibilityDescription: "Typesong muted")
+        } else if tap == nil && !agentOn {
+            button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Typesong needs Input Monitoring")
+        } else if agentOn {
+            button.image = Self.agentIcon
+        } else {
+            button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Typesong")
+        }
     }
+
+    // A music note with a small sparkle in its top-right corner, drawn as a template so it follows the menu bar's color.
+    static let agentIcon: NSImage = {
+        let size = NSSize(width: 20, height: 18)
+        let image = NSImage(size: size, flipped: false) { _ in
+            if let note = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) {
+                note.draw(in: NSRect(x: 0, y: (size.height - note.size.height) / 2, width: note.size.width, height: note.size.height))
+            }
+            if let spark = NSImage(systemSymbolName: "sparkle", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold)) {
+                spark.draw(in: NSRect(x: size.width - spark.size.width, y: size.height - spark.size.height, width: spark.size.width, height: spark.size.height))
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Typesong, agent music on"
+        return image
+    }()
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
