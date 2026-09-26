@@ -1138,7 +1138,8 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       const lead = [3,-2,2,-3][(toolCalls++)%4];
       [...name].forEach((c,i)=>agentAt(()=>input(c,'char', i===0 ? {...it.voice, step:lead} : it.voice), i*75));
       const [ch,kind] = TOOL_ACCENT(it.t);
-      agentAt(()=>input(ch,kind), name.length*75+40);
+      // a command's kick shares the words' beat budget (once per 1.2 s), so tool bursts can't stack bass
+      if (kind!=='space' || performance.now()-lastAgentBeat > 1200){ if (kind==='space') lastAgentBeat = performance.now(); agentAt(()=>input(ch,kind), name.length*75+40); }
       wait = name.length*75+260;
     } else if (it.k==='error'){ input('2','char'); agentAt(()=>input(',','char'), 120); wait = 400; }
     else if (it.k==='notify'){ input('\n','enter'); agentAt(()=>input('o','char'), 450); agentAt(()=>input('e','char'), 750); wait = 1100; }   // needs you
