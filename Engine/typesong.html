@@ -1074,8 +1074,17 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     if (t - agentLastEv > 600000){ agentWorking = false; return; }
     if (t < pulseDue || agentBusy) return;
     pulseDue = t + 1800 + Math.random()*1400;
-    input('a','char',{...pulseVoice, step:[-2,-1,1,2][Math.floor(Math.random()*4)], vel:0.45});
+    // Steps of ±1–2 rocked between the same two notes through long waits. Wander instead: bigger steps,
+    // a lean back toward the middle of the range, and never straight back to the note it just left.
+    const span = style.span || style.scale.length*2, mid = span/2;
+    let step = [2,3,4,2,3][Math.floor(Math.random()*5)];
+    const up = gpos < mid-3 ? Math.random()<0.8 : gpos > mid+3 ? Math.random()<0.2 : Math.random()<0.5;
+    if (!up) step = -step;
+    if (step === -pulseLast) step = -step;
+    pulseLast = step;
+    input('a','char',{...pulseVoice, step, vel:0.45});
   }
+  let pulseLast = 0;
   const TOOL_ACCENT = t => /^(bash|shell|run|exec)/i.test(t) ? [' ','space']
     : /(edit|write|notebook|patch|replace)/i.test(t) ? ['.','char']
     : /(read|grep|glob|ls|search|find|list)/i.test(t) && !/web/i.test(t) ? ['1','char']
