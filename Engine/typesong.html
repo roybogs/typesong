@@ -616,7 +616,8 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   // leave a note alone unless it rubs a half step against the chord
   const softSnap = (m, pcs) => pcs.some(p => pc(p-m)===1 || pc(m-p)===1) && !pcs.includes(pc(m)) ? snap(m, pcs) : m;
   let lastMidi = 0;
-  const snap = (midi, pcs) => { for (let d=0; d<7; d++) for (const m of [midi-d, midi+d]) if (pcs.includes(pc(m))) return m; return midi; };
+  let lastStep = 0;
+  const snap = (midi, pcs) => { for (let d=0; d<7; d++) for (const m of (lastStep>0 ? [midi+d, midi-d] : [midi-d, midi+d])) if (pcs.includes(pc(m))) return m; return midi; };
   const degMidi = (p, st) => { const n=st.scale.length; return st.root + Math.floor(p/n)*12 + st.scale[((p%n)+n)%n]; };
 
   // ---- cadence ----
@@ -638,6 +639,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   const walk = (c, forced) => {
     let step = forced ?? STEP[c]; if (step===undefined) step = (c.charCodeAt(0)%5)-2;
     const max = style.span || style.scale.length*2;
+    lastStep = step;
     gpos += step; if (gpos>max) gpos = max-(gpos-max); if (gpos<0) gpos = -gpos;
   };
   const hueDeg = midi => { const i=style.scale.indexOf(pc(midi-style.root)); return i<0?0:i; };
@@ -757,8 +759,12 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       used.add(s); for (const x of used) if (x < s-32) used.delete(x);
     }
     const chd = q ? chordAt(s) : curChord(), strong = q && s%4===0;
-    let midi = q ? snap(degMidi(gpos, style), strong ? chd.pcs.slice(0,4) : chd.pcs) : softSnap(degMidi(gpos, style), chd.pcs);
-    if (!q && midi===lastMidi){ gpos += gpos>4 ? -1 : 1; midi = softSnap(degMidi(gpos, style), chd.pcs); }
+    const pick = g => q ? snap(degMidi(g, style), strong ? chd.pcs.slice(0,4) : chd.pcs) : softSnap(degMidi(g, style), chd.pcs);
+    let midi = pick(gpos);
+    if (midi===lastMidi){   // never the same note twice in a row: try nearby steps until one differs
+      const maxP = style.span || style.scale.length*2;
+      for (const d of [1,-1,2,-2,3,-3]){ const g=gpos+d; if (g<0 || g>maxP) continue; const m=pick(g); if (m!==lastMidi){ gpos=g; midi=m; break; } }
+    }
     lastMidi = midi;
     if (o.oct) midi += 12*o.oct;
     const vel = (q ? (strong?0.26:0.19) : 0.24) * (ch!==c?1.35:1) * (o.vel ?? 1);
@@ -1076,7 +1082,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   }
   // The spacebar sound (kick, low piano, deep pulse…) lands only at phrase breaks or every 4th word,
   // and at most once per 1.2 s. On every word it spammed the bass.
-  let agentWords = 0, lastAgentBeat = 0;
+  let agentWords = 0, lastAgentBeat = 0, toolCalls = 0;
   function agentBeat(phraseEnd, delay){
     agentWords++;
     const t = performance.now();
@@ -1102,7 +1108,8 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       }
     } else if (it.k==='tool'){
       const name = clean(it.t).toLowerCase().slice(0,4) || 'tool';
-      [...name].forEach((c,i)=>agentAt(()=>input(c,'char',it.voice), i*75));
+      const lead = [3,-2,2,-3][(toolCalls++)%4];
+      [...name].forEach((c,i)=>agentAt(()=>input(c,'char', i===0 ? {...it.voice, step:lead} : it.voice), i*75));
       const [ch,kind] = TOOL_ACCENT(it.t);
       agentAt(()=>input(ch,kind), name.length*75+40);
       wait = name.length*75+260;
@@ -1132,6 +1139,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       setStyle: k => { const b=document.querySelector(`#styles button[data-style="${k}"]`); if (b) b.click(); },
       setMuted,
       state: () => ({style:styleKey, muted}),
+      stats: () => musicStats(),   // same numbers as the health log; used by tests
       setVisible,
       agent: agentEvent,
       setAgentScope: sc => { agentScope = sc==='all' ? 'all' : 'focus'; },
