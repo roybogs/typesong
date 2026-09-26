@@ -1073,18 +1073,36 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     const t = performance.now();
     if (t - agentLastEv > 600000){ agentWorking = false; return; }
     if (t < pulseDue || agentBusy) return;
-    pulseDue = t + 1800 + Math.random()*1400;
-    // Steps of ±1–2 rocked between the same two notes through long waits. Wander instead: bigger steps,
-    // a lean back toward the middle of the range, and never straight back to the note it just left.
-    const span = style.span || style.scale.length*2, mid = span/2;
-    let step = [2,3,4,2,3][Math.floor(Math.random()*5)];
-    const up = gpos < mid-3 ? Math.random()<0.8 : gpos > mid+3 ? Math.random()<0.2 : Math.random()<0.5;
-    if (!up) step = -step;
-    if (step === -pulseLast) step = -step;
-    pulseLast = step;
-    input('a','char',{...pulseVoice, step, vel:0.45});
+    // Short phrases with rests between, each one made fresh (length, shape, rhythm) and never a repeat of the
+    // last several, so long waits sound like a tune idling rather than a loop. Phrases lean back toward the middle.
+    if (!pulsePhrase.length){
+      const span = style.span || style.scale.length*2, mid = span/2;
+      const lean = gpos>mid+3 ? -1 : gpos<mid-3 ? 1 : 0;
+      for (let tries=0; tries<20; tries++){
+        pulsePhrase = makePhrase(lean);
+        const key = pulsePhrase.map(n=>n.step).join(',');
+        if (!pulseSeen.includes(key)){ pulseSeen.push(key); if (pulseSeen.length>12) pulseSeen.shift(); break; }
+      }
+    }
+    const n = pulsePhrase.shift();
+    input('a','char',{...pulseVoice, step: n.step, vel: n.vel});
+    pulseDue = t + (pulsePhrase.length ? n.gap : 2400 + Math.random()*1800);
   }
-  let pulseLast = 0;
+  // Contours: rise, fall, arch, dip, or zigzag, 3–5 notes, steps of 1–4 (never 0), a mixed rhythm, and a softer last note.
+  function makePhrase(lean){
+    const len = 3 + Math.floor(Math.random()*3), r = () => 1 + Math.floor(Math.random()*4);
+    const shape = ['rise','fall','arch','dip','zig'][Math.floor(Math.random()*5)];
+    let steps = Array.from({length:len}, (_,i) => {
+      const half = i < len/2;
+      const dir = shape==='rise' ? 1 : shape==='fall' ? -1 : shape==='arch' ? (half?1:-1) : shape==='dip' ? (half?-1:1) : (i%2?-1:1);
+      return dir * r();
+    });
+    const sum = steps.reduce((x,y)=>x+y,0);
+    if (lean && Math.sign(sum) === -lean) steps = steps.map(x=>-x);   // turn it around toward the middle
+    const gaps = [[480,480,480,480],[360,360,720,480],[720,360,360,600],[480,720,360,480]][Math.floor(Math.random()*4)];
+    return steps.map((step,i)=>({step, gap: gaps[i%4] + Math.random()*60, vel: i===len-1 ? 0.36 : 0.45 + Math.random()*0.06}));
+  }
+  let pulsePhrase = [], pulseSeen = [];
   const TOOL_ACCENT = t => /^(bash|shell|run|exec)/i.test(t) ? [' ','space']
     : /(edit|write|notebook|patch|replace)/i.test(t) ? ['.','char']
     : /(read|grep|glob|ls|search|find|list)/i.test(t) && !/web/i.test(t) ? ['1','char']
@@ -1120,9 +1138,12 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     else if (ev.type==='stop'){
       // "Done" should sound when the agent finishes, not after its reply's words play out: drop anything still
       // queued (the reply text only arrives with the stop anyway) and resolve on the chord right now.
+      // Then the reply's words play out after it as a short outro (capped), which keeps the fuller ending.
+      const coda = agentQ.filter(it => it.k==='word' && !it.soft).slice(-24);
       agentQ.length = 0;
       input('\n','enter');
       spark(.5,.5,'chord');
+      if (coda.length){ agentQ.push({k:'rest', ms:900}, ...coda); if (!agentBusy) agentPump(); }
       return;
     }
     if (agentQ.length > 160) agentQ.splice(0, agentQ.length-80);   // fell behind: skip ahead
@@ -1164,6 +1185,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       wait = name.length*75+260;
     } else if (it.k==='error'){ input('2','char'); agentAt(()=>input(',','char'), 120); wait = 400; }
     else if (it.k==='notify'){ input('\n','enter'); agentAt(()=>input('o','char'), 450); agentAt(()=>input('e','char'), 750); wait = 1100; }   // needs you
+    else if (it.k==='rest') wait = it.ms;
     else if (it.k==='stop' || it.k==='enter'){ input('\n','enter'); wait = 900; }
     agentAt(agentPump, wait);
   }
