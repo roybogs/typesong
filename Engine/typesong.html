@@ -794,7 +794,32 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   pad_.addEventListener('input', save);
 
   // pauses and slow modulation
+  // Audio watchdog: after the Mac sleeps, the system can leave the AudioContext "running" with a frozen clock,
+  // so notes pile up on a stalled timeline (choppy, then silent). If the clock stops moving for ~3 s while it
+  // should be running, rebuild the audio engine. The Mac app also calls resetAudio right after a wake.
+  let clockSeen = 0, clockWall = 0, stalls = 0, resetTimes = [];
+  function watchClock(){
+    if (!ctx || ctx.state !== 'running'){ clockWall = 0; stalls = 0; return; }
+    const w = performance.now();
+    if (!clockWall){ clockWall = w; clockSeen = ctx.currentTime; return; }
+    if (w - clockWall < 1500) return;
+    stalls = ctx.currentTime - clockSeen < 0.2 ? stalls + 1 : 0;
+    clockWall = w; clockSeen = ctx.currentTime;
+    if (stalls < 2) return;
+    resetTimes = resetTimes.filter(t => w - t < 60000);
+    if (resetTimes.length >= 3 && w - resetTimes[resetTimes.length-1] < 30000) return;   // device still dead: back off to every 30 s
+    resetTimes.push(w);
+    resetAudio('clock stalled');
+  }
+  function resetAudio(reason){
+    if (!ctx) return;
+    try { ctx.close(); } catch(e){}
+    ctx = null; bandOn = false; bed = null; stalls = 0; clockWall = 0;
+    try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'audioReset', reason}); } catch(e){}
+    audio();
+  }
   function slowTick(){
+    watchClock();
     const idle = performance.now()-lastKey;
     if (style.free && ctx && lastKey && !rested && idle>1600){
       rested=true; const c=curChord(), v=instrument, t=now();
@@ -1141,6 +1166,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       state: () => ({style:styleKey, muted}),
       stats: () => musicStats(),   // same numbers as the health log; used by tests
       setVisible,
+      resetAudio,
       agent: agentEvent,
       setAgentScope: sc => { agentScope = sc==='all' ? 'all' : 'focus'; },
       tick: (()=>{ let n=0; return ()=>{ schedTick(); if (++n % 5 === 0) slowTick(); }; })(),   // called every 25 ms by the app

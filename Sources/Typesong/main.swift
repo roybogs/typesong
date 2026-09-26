@@ -39,6 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         buildStatusItem()
         if !selfTest { startListening() }          // the self-test never triggers the permission prompt
         agentServer = AgentServer { [weak self] event in self?.agentEvent(event) }
+        // After the Mac wakes, the audio clock can come back frozen; rebuild the engine's audio right away.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            HealthLog.write("mac woke: resetting audio")
+            self?.startClock()
+            self?.js("typesongHost.resetAudio('mac woke')")
+        }
         if agentOn || selfTest { agentServer?.start() }
         if CommandLine.arguments.contains("--show") { showWindow() }
     }
@@ -87,6 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             if let s = body["style"] as? String { currentStyle = s }
             if let m = body["muted"] as? Bool { muted = m }
             refreshIcon()
+        case "audioReset":
+            HealthLog.write("audio reset: \(body["reason"] as? String ?? "?")")
         case "sleep":
             stopClock()
             HealthLog.write("asleep: audio suspended, clock stopped")
