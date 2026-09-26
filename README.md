@@ -39,3 +39,16 @@ Claude Code's activity plays the instrument. Toggle it from the menu bar: **Agen
 - Mapping: words play like typing (thinking slower and sparser); each tool plays a motif spelled from its
   name plus an accent (commands = kick, edits = snare, reads = low tone, web = question-mark accent,
   subagents = chord); failures = a low tone and snare; needs-you = chord and two notes; finished = chord.
+
+## Windows (and later Linux): `desktop/`
+
+A Tauri app that runs the same engine in a hidden WebView2 window, with a global keyboard listener, tray menu,
+the same agent door on `127.0.0.1:47321`, and hook mode built in (`Typesong.exe --hook`, no Python needed).
+
+- Built and self-tested on GitHub Actions (`.github/workflows/windows.yml`): the installer is uploaded as the
+  `Typesong-Windows-installer` artifact of each run.
+- Unlike macOS, Windows does not hide password fields from keyboard listeners: those keys play notes too, and are
+  still never recorded.
+- Claude Code hook on Windows: register `"C:\\Users\\<you>\\AppData\\Local\\Typesong\\typesong.exe" --hook` for the
+  same seven events as the Mac (see Agent mode above).
+- Icons are drawn with plain paths (`desktop/art/draw-icons.swift`) since Apple's symbols can't ship on Windows.

@@ -1161,7 +1161,10 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   if (macHost){
     document.documentElement.classList.add('mac-host');
     $('pad').hidden = true; $('copy').hidden = true; $('clear').hidden = true;
-    document.querySelector('.lede').textContent = 'Typing anywhere on your Mac plays Typesong. Pick a style here or from the menu bar. Password fields are never heard.';
+    // Only macOS hides password fields from keyboard listeners, so only the Mac makes that promise.
+    document.querySelector('.lede').textContent = window.TYPESONG_PLATFORM==='windows'
+      ? 'Typing anywhere on your PC plays Typesong. Pick a style here or from the tray icon. Keys only become notes and are never recorded.'
+      : 'Typing anywhere on your Mac plays Typesong. Pick a style here or from the menu bar. Password fields are never heard.';
     window.typesongHost = {
       key: (ch, kind) => input(ch, kind),
       setStyle: k => { const b=document.querySelector(`#styles button[data-style="${k}"]`); if (b) b.click(); },
