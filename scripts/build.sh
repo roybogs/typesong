@@ -17,6 +17,7 @@ BIN="$(swift build -c release --arch arm64 --show-bin-path)/Typesong"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Typesong"
+cp desktop/src-tauri/icons/icon.icns "$APP/Contents/Resources/AppIcon.icns"   # same logo as Windows/Linux
 
 # The engine is the same page as the web version; give it a real document shell and charset.
 {
@@ -35,6 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Typesong</string>
   <key>CFBundleDisplayName</key><string>Typesong</string>
   <key>CFBundleExecutable</key><string>Typesong</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
