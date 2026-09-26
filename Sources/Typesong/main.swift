@@ -244,16 +244,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         refreshIcon()
     }
 
-    // ♪ = your typing plays · ♪ with a sparkle = agent music is on · mute = muted, or nothing can play
-    // (typing paused and agent music off) · triangle = keyboard permission missing.
+    // ♪ = your typing plays (agent music may be on too) · ♪ with a sparkle = only agent music, typing paused ·
+    // mute = muted, or nothing can play · triangle = typing is on but keyboard permission is missing.
     private func refreshIcon() {
         guard let button = statusItem?.button else { return }
         if muted || (paused && !agentOn) {
             button.image = NSImage(systemSymbolName: "speaker.slash", accessibilityDescription: "Typesong muted")
-        } else if tap == nil && !agentOn {
-            button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Typesong needs Input Monitoring")
-        } else if agentOn {
+        } else if paused {
             button.image = Self.agentIcon
+        } else if tap == nil {
+            button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Typesong needs Input Monitoring")
         } else {
             button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Typesong")
         }
@@ -274,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Typesong, agent music on"
+        image.accessibilityDescription = "Typesong, agent music only"
         return image
     }()
 
