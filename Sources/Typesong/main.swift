@@ -378,22 +378,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func showWindow() {
         NSApp.setActivationPolicy(.regular)
         js("typesongHost.setVisible(true)")
-        let saved = UserDefaults.standard.string(forKey: "windowFrame").map(NSRectFromString)
+        // A saved size only counts if it's a real window size; the hidden window is parked at 2×2.
+        let saved = UserDefaults.standard.string(forKey: "windowFrame").map(NSRectFromString).flatMap(Self.usableFrame)
         window.setFrame(saved ?? NSRect(x: 0, y: 0, width: 920, height: 780), display: false)
         if saved == nil { window.center() }
         window.makeKeyAndOrderFront(nil)
+        if #available(macOS 14.0, *) { NSApp.activate() }
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func windowWillClose(_ notification: Notification) {
         // Closing the window keeps the music running from the menu bar; the page stops drawing.
         js("typesongHost.setVisible(false)")
-        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "windowFrame")
+        if let frame = Self.usableFrame(window.frame) {   // quitting also "closes" the parked 2×2 window: never save that
+            UserDefaults.standard.set(NSStringFromRect(frame), forKey: "windowFrame")
+        }
         DispatchQueue.main.async { self.park() }
         NSApp.setActivationPolicy(.accessory)
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
+
+    private static func usableFrame(_ r: NSRect) -> NSRect? { r.width >= 400 && r.height >= 300 ? r : nil }
 
     // While hidden, the page is laid out at 2×2 points so WebKit keeps almost no graphics memory for it.
     private func park() {
