@@ -79,13 +79,18 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
             build_engine_window(&handle, args.iter().any(|a| a == "--show"))?;
-            let menu = build_menu(&handle)?;
-            TrayIconBuilder::with_id(TRAY)
-                .icon(tray_icon(&handle))
-                .tooltip("Typesong")
-                .menu(&menu)
-                .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
-                .build(app)?;
+            // A desktop without tray support (e.g. stock GNOME) must not stop the music: log it and carry on.
+            let tray = build_menu(&handle).and_then(|menu| {
+                TrayIconBuilder::with_id(TRAY)
+                    .icon(tray_icon(&handle))
+                    .tooltip("Typesong")
+                    .menu(&menu)
+                    .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
+                    .build(app)
+            });
+            if let Err(e) = tray {
+                log::write(&format!("tray icon unavailable, music continues without it: {e}"));
+            }
             agent_server::start(handle.clone());
             start_clock(handle.clone());
             if !selftest {
