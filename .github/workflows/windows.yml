@@ -1,0 +1,93 @@
+name: Windows build and self-test
+
+on:
+  push:
+    branches: [main]
+    paths: ["Engine/**", "desktop/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare engine page
+        shell: bash
+        run: desktop/scripts/prepare-engine.sh
+
+      - name: Build app and installer
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis
+
+      # GitHub's Windows machines have no sound card; give the engine a virtual one so audio can actually run.
+      - name: Virtual audio device
+        uses: LABSN/sound-ci-helpers@v1
+        continue-on-error: true
+
+      - name: Self-test (45 s, synthetic typing, agent events, hook mode)
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "desktop/src-tauri/target/release/typesong.exe"
+          $log = Join-Path $env:LOCALAPPDATA "Typesong/health.log"
+          if (Test-Path $log) { Remove-Item $log }
+          $app = Start-Process $exe -ArgumentList "--selftest","--exit-after","45" -PassThru
+          Start-Sleep -Seconds 15
+          $body = '[{"type":"prompt","session":"ci"},{"type":"text","text":"Testing agent music on Windows. It should play.","session":"ci"},{"type":"tool","tool":"Bash","session":"ci"},{"type":"stop","session":"ci"}]'
+          try { Invoke-WebRequest -Uri "http://127.0.0.1:47321/event" -Method POST -Body $body -ContentType "application/json" -UseBasicParsing | Select-Object StatusCode } catch { Write-Host "agent door failed: $_" }
+          try { Invoke-WebRequest -Uri "http://127.0.0.1:47321/" -UseBasicParsing } catch { Write-Host "non-event path rejected as expected: $($_.Exception.Response.StatusCode)" }
+          '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"ci"}' | & $exe --hook | Out-Null
+          Write-Host "hook mode exited with $LASTEXITCODE"
+          $app.WaitForExit(90000) | Out-Null
+          Write-Host "---- health.log ----"
+          Get-Content $log
+
+      - name: Connect Claude Code (settings merge keeps other settings, no duplicates)
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "desktop/src-tauri/target/release/typesong.exe"
+          $env:USERPROFILE = Join-Path $env:RUNNER_TEMP "home"; New-Item -ItemType Directory -Force "$env:USERPROFILE/.claude" | Out-Null
+          '{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' | Set-Content "$env:USERPROFILE/.claude/settings.json"
+          & $exe --connect-claude | Write-Host; & $exe --connect-claude | Write-Host
+          $s = Get-Content "$env:USERPROFILE/.claude/settings.json" -Raw | ConvertFrom-Json
+          $stop = @($s.hooks.Stop | ForEach-Object { $_.hooks } | ForEach-Object { $_.command })
+          Write-Host ($stop -join ' | ')
+          if ($s.model -ne "x" -or $stop.Count -ne 2 -or -not ($stop -contains "echo mine") -or @($s.hooks.PSObject.Properties).Count -ne 7) { Write-Host "::error::settings merge wrong"; exit 1 }
+          if (-not (Test-Path "$env:USERPROFILE/.claude/settings.json.before-typesong")) { Write-Host "::error::no backup"; exit 1 }
+
+      - name: Check self-test results
+        shell: pwsh
+        run: |
+          $lines = Get-Content (Join-Path $env:LOCALAPPDATA "Typesong/health.log")
+          $health = $lines | Where-Object { $_ -match "ticks/5s=(\d+)" }
+          $ticks = $health | ForEach-Object { [int]([regex]::Match($_, "ticks/5s=(\d+)").Groups[1].Value) }
+          $events = $health | ForEach-Object { [int]([regex]::Match($_, "agentEvents=(\d+)").Groups[1].Value) } | Measure-Object -Maximum
+          $clocks = $health | ForEach-Object { [double]([regex]::Match($_, "clock=([\d.]+)").Groups[1].Value) }
+          $audio = ($health | Where-Object { $_ -match "audio=running" }).Count
+          $fail = @()
+          if (-not ($lines -match "engine page loaded")) { $fail += "engine page never loaded" }
+          if (($ticks | Where-Object { $_ -ge 180 }).Count -lt 1) { $fail += "clock too slow: ticks/5s = $($ticks -join ', ') (want about 200)" }
+          if ($events.Maximum -lt 5) { $fail += "agent events received: $($events.Maximum) (want 5: 4 posted + 1 from hook mode)" }
+          Write-Host "ticks/5s: $($ticks -join ', ')"
+          Write-Host "agent events: $($events.Maximum)"
+          Write-Host "audio clock: $($clocks -join ', ') (running in $audio of $($health.Count) windows)"
+          if ($audio -lt 1 -or ($clocks | Measure-Object -Maximum).Maximum -le 0) { Write-Host "::warning::audio did not run on this machine (clock never advanced)" }
+          if ($fail.Count) { $fail | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host "Self-test passed."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Typesong-Windows-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

@@ -1,0 +1,92 @@
+name: Linux build and self-test
+
+on:
+  push:
+    branches: [main]
+    paths: ["Engine/**", "desktop/**", ".github/workflows/linux.yml"]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (WebKitGTK, tray, X11 input, audio, virtual display)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+            libssl-dev patchelf libfuse2 libx11-dev libxtst-dev libxi-dev \
+            xvfb pulseaudio gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare engine page
+        run: desktop/scripts/prepare-engine.sh
+
+      - name: Build app, .deb and AppImage
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2 build --bundles deb,appimage
+
+      - name: Self-test (45 s, synthetic typing, agent events, hook mode)
+        run: |
+          set +e   # keep going on errors so the log below always shows what happened
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-$UID}"; mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+          pulseaudio --start --exit-idle-time=-1 && pactl load-module module-null-sink sink_name=ci && pactl set-default-sink ci || echo "::warning::no virtual audio"
+          exe="$PWD/desktop/src-tauri/target/release/typesong"
+          log="$HOME/.local/share/Typesong/health.log"; rm -f "$log"
+          dbus-run-session -- xvfb-run -a "$exe" --selftest --exit-after 45 > app-output.txt 2>&1 &
+          app=$!
+          sleep 15
+          curl -s -o /dev/null -w "agent door: HTTP %{http_code}\n" -X POST -H "Content-Type: application/json" \
+            --data '[{"type":"prompt","session":"ci"},{"type":"text","text":"Testing agent music on Linux. It should play.","session":"ci"},{"type":"tool","tool":"Bash","session":"ci"},{"type":"stop","session":"ci"}]' \
+            http://127.0.0.1:47321/event
+          curl -s -o /dev/null -w "non-event path: HTTP %{http_code}\n" http://127.0.0.1:47321/
+          echo '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"ci"}' | "$exe" --hook; echo "hook mode exited with $?"
+          wait $app || true
+          echo "---- health.log ----"; cat "$log"
+          echo "---- app output ----"; grep -v "AT-SPI" app-output.txt | tail -40
+          exit 0
+
+      - name: Connect Claude Code (settings merge keeps other settings, no duplicates)
+        run: |
+          exe="$PWD/desktop/src-tauri/target/release/typesong"
+          export HOME="$(mktemp -d)"; mkdir -p "$HOME/.claude"
+          echo '{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"
+          "$exe" --connect-claude; "$exe" --connect-claude
+          cat "$HOME/.claude/settings.json"
+          jq -e '.model=="x" and ([.hooks.Stop[].hooks[].command] | length==2 and index("echo mine")!=null) and (.hooks|length==7)' "$HOME/.claude/settings.json"
+          test -f "$HOME/.claude/settings.json.before-typesong"
+
+      - name: Check self-test results
+        run: |
+          log="$HOME/.local/share/Typesong/health.log"
+          ticks=$(grep -o 'ticks/5s=[0-9]*' "$log" | cut -d= -f2 | tr '\n' ' ')
+          events=$(grep -o 'agentEvents=[0-9]*' "$log" | cut -d= -f2 | sort -n | tail -1)
+          clocks=$(grep -o 'clock=[0-9.]*' "$log" | cut -d= -f2 | tr '\n' ' ')
+          running=$(grep -c 'audio=running' "$log" || true)
+          echo "ticks/5s: $ticks"; echo "agent events: ${events:-0}"; echo "audio clock: $clocks (running in $running windows)"
+          fail=0
+          grep -q "engine page loaded" "$log" || { echo "::error::engine page never loaded"; fail=1; }
+          for t in $ticks; do [ "$t" -ge 180 ] && ok=1; done; [ "${ok:-0}" = 1 ] || { echo "::error::clock too slow: $ticks (want about 200)"; fail=1; }
+          [ "${events:-0}" -ge 5 ] || { echo "::error::agent events received: ${events:-0} (want 5)"; fail=1; }
+          max=$(echo $clocks | tr ' ' '\n' | sort -n | tail -1)
+          awk "BEGIN{exit !(${max:-0} > 0)}" || echo "::warning::audio did not run (clock never advanced)"
+          [ $fail = 0 ] && echo "Self-test passed." || exit 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Typesong-Linux-packages
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
