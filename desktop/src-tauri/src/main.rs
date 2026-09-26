@@ -26,7 +26,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 
 const STYLES: [(&str, &str); 7] = [
     ("lofi", "Lofi"), ("night", "Late night"), ("ambient", "Ambient"), ("angelic", "Ethereal"),
-    ("rain", "Rainfall"), ("noise", "Noise"), ("free", "Free"),
+    ("rain", "Rainfall"), ("noise", "Noise"), ("free", "Instruments"),
 ];
 const TRAY: &str = "typesong";
 

@@ -8,7 +8,7 @@ import CoreGraphics
 
 let styles: [(key: String, title: String)] = [
     ("lofi", "Lofi"), ("night", "Late night"), ("ambient", "Ambient"), ("angelic", "Ethereal"),
-    ("rain", "Rainfall"), ("noise", "Noise"), ("free", "Free"),
+    ("rain", "Rainfall"), ("noise", "Noise"), ("free", "Instruments"),
 ]
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
