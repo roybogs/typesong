@@ -797,9 +797,10 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   // Audio watchdog: after the Mac sleeps, the system can leave the AudioContext "running" with a frozen clock,
   // so notes pile up on a stalled timeline (choppy, then silent). If the clock stops moving for ~3 s while it
   // should be running, rebuild the audio engine. The Mac app also calls resetAudio right after a wake.
-  let clockSeen = 0, clockWall = 0, stalls = 0, resetTimes = [];
+  let clockSeen = 0, clockWall = 0, stalls = 0, resetTimes = [], lastResetAt = -1e9;
+  const RESET_GRACE = 8000;   // one reset per wake: skip others within 8 s, and give a fresh engine time to start
   function watchClock(){
-    if (!ctx || ctx.state !== 'running'){ clockWall = 0; stalls = 0; return; }
+    if (!ctx || ctx.state !== 'running' || performance.now() - lastResetAt < RESET_GRACE){ clockWall = 0; stalls = 0; return; }
     const w = performance.now();
     if (!clockWall){ clockWall = w; clockSeen = ctx.currentTime; return; }
     if (w - clockWall < 1500) return;
@@ -812,7 +813,8 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     resetAudio('clock stalled');
   }
   function resetAudio(reason){
-    if (!ctx) return;
+    if (!ctx || performance.now() - lastResetAt < RESET_GRACE) return;
+    lastResetAt = performance.now();
     try { ctx.close(); } catch(e){}
     ctx = null; bandOn = false; bed = null; stalls = 0; clockWall = 0;
     try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'audioReset', reason}); } catch(e){}
