@@ -634,8 +634,8 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   const rainCurve = w => w<70 ? w/70*0.1 : w<100 ? 0.1+(w-70)/30*0.2 : w<130 ? 0.3+(w-100)/30*0.25 : Math.min(1, 0.55+(w-130)/20*0.45);
   let rainLvl = 0;
   const bedLevel = () => rainLvl;
-  const walk = c => {
-    let step = STEP[c]; if (step===undefined) step = (c.charCodeAt(0)%5)-2;
+  const walk = (c, forced) => {
+    let step = forced ?? STEP[c]; if (step===undefined) step = (c.charCodeAt(0)%5)-2;
     const max = style.span || style.scale.length*2;
     gpos += step; if (gpos>max) gpos = max-(gpos-max); if (gpos<0) gpos = -gpos;
   };
@@ -705,7 +705,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     else knock(at);
   }
 
-  function play(ch, kind){
+  function play(ch, kind, o={}){
     startBand();
     const t=now(), q=style.quant;
     const base = q ? Math.max(0, Math.ceil((t-t0)/sd()-0.25)) : 0;
@@ -732,9 +732,9 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       else bass(m, at(s), 0.5, style.id==='ambient'?1.8:0.7);
       later(at(s),()=>spark(.5,.85,'bass')); return;
     }
-    walk(c);
+    walk(c, o.step);
     if ('aeiou'.includes(c)) curVowel=c;          // your vowels become the voices' vowels
-    const pan = panOf(c);
+    const pan = o.pan ?? panOf(c);
     let s=0;
     if (q){
       const s0=base; s=s0; while (used.has(s)) s++;
@@ -745,6 +745,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     let midi = q ? snap(degMidi(gpos, style), strong ? chd.pcs.slice(0,4) : chd.pcs) : softSnap(degMidi(gpos, style), chd.pcs);
     if (!q && midi===lastMidi){ gpos += gpos>4 ? -1 : 1; midi = softSnap(degMidi(gpos, style), chd.pcs); }
     lastMidi = midi;
+    if (o.oct) midi += 12*o.oct;
     const vel = (q ? (strong?0.26:0.19) : 0.24) * (ch!==c?1.35:1);
     lead(midi, vel, pan, at(s));
     notes++;
@@ -752,10 +753,10 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   }
   function nextFreeChord(){ freeIdx++; $('chord').textContent = style.prog[freeIdx%style.prog.length].name; }
 
-  function input(ch, kind){
+  function input(ch, kind, o){
     audio();
     cadence(performance.now());
-    play(ch, kind);
+    play(ch, kind, o);
   }
 
   // ---- text box ----
@@ -1006,14 +1007,26 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     : /(read|grep|glob|ls|search|find|list)/i.test(t) && !/web/i.test(t) ? ['1','char']
     : /(web|fetch|browser|navigate)/i.test(t) ? ['?','char']
     : /(task|agent|subagent)/i.test(t) ? ['\n','enter'] : [',','char'];
+  // Which chats play: 'focus' follows the chat you last sent a prompt to; 'all' plays every chat,
+  // each panned to its own spot and octave so they stay separable. "Needs you" always plays.
+  let agentScope = 'focus', focusSession = null;
+  const hash = str => { let h=2166136261; for (const ch of String(str)) { h^=ch.charCodeAt(0); h=Math.imul(h,16777619); } return h>>>0; };
+  const sessionVoice = id => { if (agentScope!=='all' || !id) return {}; const h=hash(id); return {pan: ((h%7)/6)*1.2-0.6, oct: [0,1,-1][(h>>3)%3]}; };
+  // A word's melodic step comes from the whole word (±1..4), so common first letters don't pin the tune;
+  // sentence endings fall, questions rise.
+  const wordStep = w => { const end=w[w.length-1]; if (end==='.'||end==='!') return -3; if (end==='?') return 3; return [-4,-3,-2,-1,1,2,3,4][hash(w.toLowerCase())%8]; };   // never 0, so a word never repeats the last note
   function agentEvent(ev){
     if (!ev || !ev.type) return;
+    if (ev.type==='prompt' && ev.session) focusSession = ev.session;
+    if (!focusSession && ev.session) focusSession = ev.session;
+    if (agentScope==='focus' && ev.session && ev.session!==focusSession && ev.type!=='notify') return;
+    const voice = sessionVoice(ev.session);
     if (ev.type==='prompt'){ agentQ.length=0; agentQ.push({k:'enter'}); }
     else if (ev.type==='text' || ev.type==='thinking'){
       const words = String(ev.text||'').split(/\s+/).filter(w=>/[a-z0-9]/i.test(w));
-      for (const w of words) agentQ.push({k:'word', w, soft: ev.type==='thinking'});
+      for (const w of words) agentQ.push({k:'word', w, soft: ev.type==='thinking', voice});
     }
-    else if (ev.type==='tool') agentQ.push({k:'tool', t:String(ev.tool||'tool')});
+    else if (ev.type==='tool') agentQ.push({k:'tool', t:String(ev.tool||'tool'), voice});
     else if (ev.type==='tool_error') agentQ.push({k:'error'});
     else if (ev.type==='notify') agentQ.push({k:'notify'});
     else if (ev.type==='stop') agentQ.push({k:'stop'});
@@ -1028,10 +1041,11 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     const clean = s => s.replace(/[^a-z0-9.,!?]/gi,'');
     if (it.k==='word'){
       const w = clean(it.w);
-      if (it.soft){ input(w[0]||'a','char'); wait = 420; if (Math.random()<0.25) setTimeout(()=>input(' ','space'), 200); }   // thinking: sparse and slow
+      const v = {...it.voice, step: wordStep(w)};
+      if (it.soft){ input(w[0]||'a','char',v); wait = 420; if (Math.random()<0.25) setTimeout(()=>input(' ','space'), 200); }   // thinking: sparse and slow
       else {
-        input(w[0]||'a','char');
-        if (w.length>5) setTimeout(()=>input(w[w.length-1],'char'), 110);
+        input(w[0]||'a','char',v);
+        if (w.length>5) setTimeout(()=>input(w[w.length-1],'char',{...it.voice, step: (hash(w.slice(3))%5)-2}), 110);
         const end = w[w.length-1];
         if (/[.,!?]/.test(end)) setTimeout(()=>input(end,'char'), 170);
         setTimeout(()=>input(' ','space'), 200);
@@ -1039,7 +1053,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       }
     } else if (it.k==='tool'){
       const name = clean(it.t).toLowerCase().slice(0,4) || 'tool';
-      [...name].forEach((c,i)=>setTimeout(()=>input(c,'char'), i*75));
+      [...name].forEach((c,i)=>setTimeout(()=>input(c,'char',it.voice), i*75));
       const [ch,kind] = TOOL_ACCENT(it.t);
       setTimeout(()=>input(ch,kind), name.length*75+40);
       wait = name.length*75+260;
@@ -1071,6 +1085,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       state: () => ({style:styleKey, muted}),
       setVisible,
       agent: agentEvent,
+      setAgentScope: sc => { agentScope = sc==='all' ? 'all' : 'focus'; },
       tick: (()=>{ let n=0; return ()=>{ schedTick(); if (++n % 5 === 0) slowTick(); }; })(),   // called every 25 ms by the app
     };
     // health goes to the app's log from slowTick every ~5 s while awake: scheduler ticks (expect ~200) and audio state

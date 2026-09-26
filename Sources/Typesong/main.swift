@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var paused = false
     private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? true
     private var agentServer: AgentServer?
+    private var agentScope = UserDefaults.standard.string(forKey: "agentScope") ?? "focus"   // "focus" or "all"
     private var pendingAgent: [[String: Any]] = []
     private let selfTest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--agent-test")
     private var agentEvents = 0
@@ -74,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pageReady = true
         startClock()
+        js("typesongHost.setAgentScope('\(agentScope)')")
         pendingAgent.forEach(agentEvent); pendingAgent.removeAll()
         if CommandLine.arguments.contains("--selftest") { runSelfTest() }
     }
@@ -133,6 +135,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         agentEvents += 1
         startClock()
         js("typesongHost.agent(\(json))")
+    }
+
+    @objc private func pickAgentScope(_ sender: NSMenuItem) {
+        guard let scope = sender.representedObject as? String else { return }
+        agentScope = scope
+        UserDefaults.standard.set(scope, forKey: "agentScope")
+        js("typesongHost.setAgentScope('\(scope)')")
     }
 
     @objc private func toggleAgent() {
@@ -255,6 +264,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let agent = item("Agent music (Claude Code)", #selector(toggleAgent))
         agent.state = agentOn ? .on : .off
         menu.addItem(agent)
+        if agentOn {
+            for (scope, title) in [("focus", "Only my latest chat"), ("all", "All chats, each in its own spot")] {
+                let i = item(title, #selector(pickAgentScope(_:)))
+                i.representedObject = scope
+                i.state = agentScope == scope ? .on : .off
+                i.indentationLevel = 1
+                menu.addItem(i)
+            }
+        }
 
         let styleMenu = NSMenu()
         for s in styles {

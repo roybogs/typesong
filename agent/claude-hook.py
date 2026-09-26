@@ -66,27 +66,33 @@ def failed(response):
         return bool(response.get("is_error") or response.get("error") or response.get("interrupted"))
     return False
 
+def tag(events, session):
+    for e in events:
+        e["session"] = session
+    return events
+
 def main():
     try:
         hook = json.load(sys.stdin)
     except Exception:
         return
     name = hook.get("hook_event_name", "")
+    session = hook.get("session_id") or hook.get("transcript_path", "")   # which chat this is, so Typesong can follow one
     transcript = hook.get("transcript_path", "")
     tool = hook.get("tool_name", "")
     if name == "UserPromptSubmit":
         new_text(transcript, skip=True)
-        post([{"type": "prompt"}])
+        post(tag([{"type": "prompt"}], session))
     elif name == "PreToolUse":
-        post(new_text(transcript) + [{"type": "tool", "tool": tool}])
+        post(tag(new_text(transcript) + [{"type": "tool", "tool": tool}], session))
     elif name == "PostToolUseFailure":
-        post(new_text(transcript) + [{"type": "tool_error", "tool": tool}])
+        post(tag(new_text(transcript) + [{"type": "tool_error", "tool": tool}], session))
     elif name == "PostToolUse":
-        post(new_text(transcript) + ([{"type": "tool_error", "tool": tool}] if failed(hook.get("tool_response")) else []))
+        post(tag(new_text(transcript) + ([{"type": "tool_error", "tool": tool}] if failed(hook.get("tool_response")) else []), session))
     elif name in ("Stop", "SubagentStop"):
-        post(new_text(transcript) + ([{"type": "stop"}] if name == "Stop" else []))
+        post(tag(new_text(transcript) + ([{"type": "stop"}] if name == "Stop" else []), session))
     elif name == "Notification":
-        post([{"type": "notify"}])
+        post(tag([{"type": "notify"}], session))
 
 if __name__ == "__main__":
     try:

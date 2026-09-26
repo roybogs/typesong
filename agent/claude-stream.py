@@ -13,6 +13,9 @@ URL = "http://127.0.0.1:47321/event"
 def post(events):
     if not events:
         return
+    for e in events:
+        if session:
+            e.setdefault("session", session)
     try:
         req = urllib.request.Request(URL, data=json.dumps(events).encode(), headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=0.3).close()
@@ -20,6 +23,7 @@ def post(events):
         pass
 
 pending, buf, kind, last = [], "", None, time.time()
+session = None   # set from the run's init message; Typesong follows the chat that last started
 
 def flush_text():
     global buf, kind
@@ -32,6 +36,9 @@ for line in sys.stdin:
         msg = json.loads(line)
     except Exception:
         continue
+    if msg.get("type") == "system" and msg.get("session_id") and session is None:
+        session = msg["session_id"]
+        pending.append({"type": "prompt"})
     ev = msg.get("event") if msg.get("type") == "stream_event" else None
     if ev and ev.get("type") == "content_block_delta":
         d = ev.get("delta") or {}
