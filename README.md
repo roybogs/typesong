@@ -1,62 +1,97 @@
-# Typesong for Mac
+# Typesong
 
-A menu-bar app that turns your typing, anywhere on the Mac, into music.
+**Turns your typing into music.** Every key plays a note tuned to the chord underneath, the spacebar keeps the
+beat, and your speed sets the energy. Stop typing and it settles.
 
-- `Engine/typesong.html` is the sound engine. It is the same page as the web version
-  (https://claude.ai/artifact/7JqjnEYEf86okLBHxtwvFw). Change sounds there, then rebuild.
-- `Sources/Typesong/main.swift` is the host: menu bar, a listen-only keyboard event tap, and a WKWebView
-  that runs the engine. Only which key and when crosses into the page. Nothing typed is stored or logged.
+Typesong lives in your menu bar (or system tray) and plays along with whatever you type, in any app.
+It's free, and it stays free.
 
-## Build and install
+## Sounds
+
+Seven styles: **Lofi**, **Late night**, **Ambient** (bells, glass or hum), **Ethereal**, **Rainfall**,
+**Noise** (white, pink, brown or deep brown) and **Instruments** (piano, guitar, kalimba or synth).
+
+## Download
+
+Signed builds for Mac, Windows and Linux are on the way. Until then, build it from source (below).
+
+## Privacy
+
+Typesong only needs to know *which* key was pressed and *when*, to pick a note. Nothing you type is recorded,
+stored or sent anywhere. The only thing it downloads is its fonts (from Google Fonts), and the only connection it
+accepts is from your own machine (`127.0.0.1`), for agent music.
+
+- **macOS** hides password fields from keyboard listeners entirely, so those keystrokes never reach Typesong.
+- **Windows and Linux** don't do that: keys in password fields play notes too. They're still never recorded.
+- A small health log (tick rate, audio state, note-pitch counts; never keys or text) is kept locally:
+  `~/Library/Logs/Typesong/health.log` on Mac, `%LOCALAPPDATA%\Typesong` on Windows, `~/.local/share/Typesong` on Linux.
+
+## Agent music for Claude Code (Beta)
+
+Typesong can also play what [Claude Code](https://claude.com/claude-code) is doing: words it writes play like
+typing, each tool it runs gets a short motif, and a chord tells you when it's done.
+
+Turn on **Agent music for Claude Code (Beta)** in the menu, then choose **Connect Claude Code**. That adds
+Typesong's hooks to `~/.claude/settings.json` (your other settings are kept, and the original file is saved as
+`settings.json.before-typesong`). New Claude Code chats will play; chats already open need a restart.
+
+Headless runs can play word by word as they stream:
+
+```bash
+claude -p "…" --output-format stream-json --include-partial-messages --verbose | agent/claude-stream.py
+```
+
+## Build from source
+
+### Mac (macOS 14+, Apple Silicon)
 
 ```bash
 scripts/install.sh
 ```
 
-Quit Typesong from its menu first; the installer refuses to replace a running copy. It keeps the previous
-version in `build/Typesong.previous.app` and checks the installed executable and signature against the build.
+Builds `build/Typesong.app`, installs it to `/Applications` and opens it. macOS will ask for **Input
+Monitoring** permission the first time. Quit Typesong from its menu before reinstalling.
 
-## Things that matter
+Signing: the build uses your first "Apple Development" certificate if you have one, so the permission survives
+rebuilds. Without one it signs ad hoc, and macOS asks for the permission again after each rebuild.
+`scripts/release.sh <version>` makes a notarized DMG (needs a Developer ID certificate).
 
-- **Signing is pinned** to the Apple Development certificate. macOS ties the Input Monitoring grant to the
-  signature; an ad-hoc build would lose the permission on every rebuild.
-- **The app drives the page's clock.** macOS throttles a hidden page's timers to once a second, which breaks
-  the beat, rain and leveling. The host calls `typesongHost.tick()` every 25 ms instead.
-- **Password fields are never heard.** macOS secure input hides those keystrokes from event taps.
-- `~/Library/Logs/Typesong/health.log` records engine health only (tick rate, audio state), never keys.
-  `Typesong --selftest` feeds synthetic keys with no window and no permission prompt; expect `ticks/5s≈200`.
+### Windows and Linux
 
-## Agent mode
+A [Tauri](https://tauri.app) app in `desktop/` that runs the same engine. Needs Rust and Node.js 20+.
 
-Claude Code's activity plays the instrument. Toggle it from the menu bar: **Agent music (Claude Code)**.
+```bash
+desktop/scripts/prepare-engine.sh
+cd desktop && npx @tauri-apps/cli@2 build
+```
 
-- The app listens on `127.0.0.1:47321` (loopback only) for `POST /event` JSON; anything else gets a 404.
-- `agent/claude-hook.py` is registered (async, 2 s timeout) in `~/.claude/settings.json` for UserPromptSubmit,
-  PreToolUse, PostToolUse, PostToolUseFailure, Stop, SubagentStop and Notification. It reads new assistant
-  text from the session transcript and sends it with each event. It prints nothing and always exits 0.
-- `agent/claude-stream.py` plays headless runs word by word as they stream:
-  `claude -p "…" --output-format stream-json --include-partial-messages --verbose | agent/claude-stream.py`
-- Mapping: words play like typing (thinking slower and sparser); each tool plays a motif spelled from its
-  name plus an accent (commands = kick, edits = snare, reads = low tone, web = question-mark accent,
-  subagents = chord); failures = a low tone and snare; needs-you = chord and two notes; finished = chord.
+GitHub Actions builds and self-tests both on every push (`.github/workflows/`); the Windows installer and the
+Linux `.deb` / AppImage are attached to each run.
 
-## Windows and Linux: `desktop/`
+Linux notes:
+- **Keyboard:** read from `/dev/input`, which works on Wayland and X11 but needs the `input` group:
+  `sudo usermod -aG input $USER`, then log out and back in. Without it Typesong falls back to an X11-only
+  listener, and the tray menu says what to do. Keys map with a US layout.
+- **Tray:** needs AppIndicator support (built into Ubuntu, Mint and KDE; stock GNOME needs the AppIndicator extension).
 
-A Tauri app that runs the same engine in a hidden WebView2 window, with a global keyboard listener, tray menu,
-the same agent door on `127.0.0.1:47321`, and hook mode built in (`Typesong.exe --hook`, no Python needed).
+## How it works
 
-- Built and self-tested on GitHub Actions (`.github/workflows/windows.yml`): the installer is uploaded as the
-  `Typesong-Windows-installer` artifact of each run.
-- Unlike macOS, Windows does not hide password fields from keyboard listeners: those keys play notes too, and are
-  still never recorded.
-- Claude Code hook on Windows: register `"C:\\Users\\<you>\\AppData\\Local\\Typesong\\typesong.exe" --hook` for the
-  same seven events as the Mac (see Agent mode above).
-- Icons are drawn with plain paths (`desktop/art/draw-icons.swift`) since Apple's symbols can't ship on Windows.
+- `Engine/typesong.html` is the whole sound engine (Web Audio), one page shared by every platform.
+- `Sources/Typesong/` is the Mac host: menu bar, a listen-only keyboard event tap, and a hidden WKWebView running
+  the engine. Only the key and its timing cross into the page.
+- `desktop/` is the Windows/Linux host (Tauri, Rust): a global keyboard listener, tray menu and hidden webview.
+- **The app drives the page's clock.** Hidden webviews throttle timers to about once a second, which would break
+  the beat, so the host calls `typesongHost.tick()` every 25 ms, and lets the audio sleep after 7 s of quiet.
+- **Agent music** listens on `127.0.0.1:47321` for `POST /event` JSON (anything else gets a 404). The Claude Code
+  hook is the app itself run as `Typesong --hook`: it reads the hook's JSON, picks up new assistant text from
+  the session transcript, and posts small events. It prints nothing and always exits 0, so it can't block Claude Code.
+- `Typesong --selftest` feeds synthetic keys with no window and no permission prompt, and logs engine health.
 
-Linux specifics:
-- Packages: `.deb` and AppImage, uploaded as the `Typesong-Linux-packages` artifact (`.github/workflows/linux.yml`).
-- Keyboard: read from `/dev/input` via evdev, which works on Wayland and X11. It needs the `input` group:
-  `sudo usermod -aG input $USER`, then log out and back in. Without it Typesong falls back to the X11 listener
-  (X11 sessions only) and the tray menu says what to do. Keys map with a US layout.
-- Tray: needs AppIndicator support (built into Ubuntu, Mint, KDE; stock GNOME needs the AppIndicator extension).
-- Claude Code hook: `typesong --hook` (the .deb installs `typesong` on the PATH).
+## Support
+
+Typesong is free. If it makes your day nicer, you can [leave a tip on Ko-fi](https://ko-fi.com/typesong).
+
+## License
+
+[GPL-3.0](LICENSE). You're free to use, study, change and share Typesong. If you distribute a version of it,
+modified or not, you must share its full source under the same license.

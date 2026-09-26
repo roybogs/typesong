@@ -1,8 +1,8 @@
 import Foundation
 
 // `Typesong --hook`: the Claude Code hook, built into the app so agent music needs no Python or repo checkout.
-// Same behavior as agent/claude-hook.py: read the hook's JSON from stdin, pick up assistant text written to the
-// session transcript since the last call, POST small events to 127.0.0.1:47321. Prints nothing (some hook output
+// Reads the hook's JSON from stdin, picks up assistant text written to the session transcript since the last call,
+// and POSTs small events to 127.0.0.1:47321. Prints nothing (some hook output
 // is fed back to the model) and always exits 0 quickly, so it can't slow down or block Claude Code.
 enum Hook {
     static let events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop", "Notification"]
@@ -114,6 +114,7 @@ enum Hook {
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         let ours: (Any) -> Bool = { h in
             let c = (h as? [String: Any])?["command"] as? String ?? ""
+            // earlier Typesong entries, including the Python hook from early builds
             return c.contains("claude-hook.py") || c.contains("Typesong --hook") || c.hasSuffix("/Typesong\" --hook")
         }
         for ev in events {

@@ -5,7 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IDENTITY="${TYPESONG_SIGN_IDENTITY:-Apple Development: 1mendozamiguel@gmail.com (9Y3KQJS852)}"
+# Uses TYPESONG_SIGN_IDENTITY if set, else the first "Apple Development" certificate in your keychain,
+# else an ad-hoc signature (fine for trying it out; macOS will ask for Input Monitoring again after each rebuild).
+IDENTITY="${TYPESONG_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}"
+IDENTITY="${IDENTITY:--}"
 BUNDLE_ID="com.miguelmendoza.typesong"
 VERSION="${TYPESONG_VERSION:-0.1.0}"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
