@@ -15,9 +15,11 @@ https://github.com/user-attachments/assets/ed112963-0f5a-4fe1-963c-dc349358643a
 Seven styles: **Lofi**, **Late night**, **Ambient** (bells, glass or hum), **Ethereal**, **Rainfall**,
 **Noise** (white, pink, brown or deep brown) and **Instruments** (piano, guitar, kalimba or synth).
 
-## Download
+## Try it
 
-Signed builds for Mac, Windows and Linux are on the way. Until then, build it from source (below).
+- **In your browser:** [roybogs.github.io/typesong](https://roybogs.github.io/typesong/) (plays while you type in the page).
+- **Windows and Linux:** [download the latest release](https://github.com/roybogs/typesong/releases/latest) to hear it in every app.
+- **Mac:** a signed build is on its way. Until then, build it from source (below).
 
 ## Privacy
 
