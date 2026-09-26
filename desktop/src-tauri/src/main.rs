@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! Typesong for Windows (and later Linux): a tray app that turns typing anywhere into music.
+//! Typesong for Windows and Linux: a tray app that turns typing anywhere into music.
 //!
 //! The sound engine is the same page as the web and Mac versions (Engine/typesong.html), running in a hidden
 //! WebView2 window. A global keyboard listener feeds it which key was pressed and when; nothing typed is stored,
@@ -8,6 +8,8 @@
 
 mod agent_server;
 mod hook;
+#[cfg(target_os = "linux")]
+mod keys_linux;
 mod log;
 
 use rdev::{EventType, Key};
@@ -242,18 +244,70 @@ pub(crate) fn agent_event(app: &AppHandle, event: &Value) {
 
 // MARK: keyboard
 
+/// Modifier keys held at the moment of a press.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Mods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub win: bool,
+}
+
+pub(crate) enum Press {
+    Space,
+    Enter,
+    Back,
+    Char(char),
+}
+
+/// One key press from any listener (rdev on Windows/X11, evdev on Linux).
+pub(crate) fn press(app: &AppHandle, p: Press, m: Mods) {
+    if matches!(p, Press::Char('m' | 'M')) && m.ctrl && m.alt && m.shift {
+        let a = app.clone();
+        let _ = app.run_on_main_thread(move || toggle_mute(&a));
+        return;
+    }
+    // Shortcuts are commands, not writing (Ctrl+Alt together is AltGr on many layouts, so it still plays).
+    if (m.ctrl && !m.alt) || m.win {
+        return;
+    }
+    match p {
+        Press::Space => send_key(app, " ", "space"),
+        Press::Enter => send_key(app, "\n", "enter"),
+        Press::Back => send_key(app, "", "back"),
+        Press::Char(c) if !c.is_control() => send_key(app, &c.to_string(), "char"),
+        Press::Char(_) => {}
+    }
+}
+
+fn set_listening(app: &AppHandle, on: bool) {
+    app.state::<Shared>().listening.store(on, Relaxed);
+    let tray_app = app.clone();
+    let _ = app.run_on_main_thread(move || refresh_tray(&tray_app));
+}
+
 fn start_keyboard(app: AppHandle) {
+    // Linux: read the keyboard devices directly (works on Wayland and X11). Without access to /dev/input,
+    // fall back to the X11 listener, which only exists on X11 sessions.
+    #[cfg(target_os = "linux")]
+    {
+        if keys_linux::start(app.clone()) {
+            return set_listening(&app, true);
+        }
+        let wayland = std::env::var("XDG_SESSION_TYPE").map_or(false, |t| t == "wayland");
+        if wayland || std::env::var_os("DISPLAY").is_none() {
+            log::write("keyboard: no access to /dev/input and no X11 session; add the user to the input group");
+            return set_listening(&app, false);
+        }
+        log::write("keyboard: no access to /dev/input, using the X11 listener");
+    }
     std::thread::spawn(move || {
-        app.state::<Shared>().listening.store(true, Relaxed);
-        let tray_app = app.clone();
-        let _ = app.run_on_main_thread(move || refresh_tray(&tray_app));
+        set_listening(&app, true);
         let mut held: HashSet<String> = HashSet::new();
         let listener_app = app.clone();
         if let Err(e) = rdev::listen(move |event| on_key(&listener_app, &mut held, event)) {
             log::write(&format!("keyboard listener failed: {e:?}"));
-            app.state::<Shared>().listening.store(false, Relaxed);
-            let tray_app = app.clone();
-            let _ = app.run_on_main_thread(move || refresh_tray(&tray_app));
+            set_listening(&app, false);
         }
     });
 }
@@ -274,29 +328,23 @@ fn on_key(app: &AppHandle, held: &mut HashSet<String>, event: rdev::Event) {
                 return; // held keys auto-repeat; one note per press
             }
             let has = |names: &[&str]| names.iter().any(|n| held.contains(*n));
-            let ctrl = has(&["ControlLeft", "ControlRight"]);
-            let alt = has(&["Alt", "AltGr"]);
-            let shift = has(&["ShiftLeft", "ShiftRight"]);
-            let win = has(&["MetaLeft", "MetaRight"]);
-            if key == Key::KeyM && ctrl && alt && shift {
-                let a = app.clone();
-                let _ = app.run_on_main_thread(move || toggle_mute(&a));
-                return;
-            }
-            // Shortcuts are commands, not writing (Ctrl+Alt together is AltGr on many layouts, so it still plays).
-            if (ctrl && !alt) || win {
-                return;
-            }
-            match key {
-                Key::Space => send_key(app, " ", "space"),
-                Key::Return | Key::KpReturn => send_key(app, "\n", "enter"),
-                Key::Backspace | Key::Delete => send_key(app, "", "back"),
-                _ => {
-                    if let Some(c) = event.name.as_deref().and_then(|n| n.chars().last()).filter(|c| !c.is_control()) {
-                        send_key(app, &c.to_string(), "char");
-                    }
-                }
-            }
+            let m = Mods {
+                ctrl: has(&["ControlLeft", "ControlRight"]),
+                alt: has(&["Alt", "AltGr"]),
+                shift: has(&["ShiftLeft", "ShiftRight"]),
+                win: has(&["MetaLeft", "MetaRight"]),
+            };
+            let p = match key {
+                Key::Space => Press::Space,
+                Key::Return | Key::KpReturn => Press::Enter,
+                Key::Backspace | Key::Delete => Press::Back,
+                Key::KeyM if m.ctrl && m.alt && m.shift => Press::Char('m'),
+                _ => match event.name.as_deref().and_then(|n| n.chars().last()) {
+                    Some(c) => Press::Char(c),
+                    None => return,
+                },
+            };
+            press(app, p, m);
         }
         EventType::KeyRelease(key) => {
             held.remove(&format!("{key:?}"));
@@ -355,7 +403,19 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let quit = MenuItem::with_id(app, "quit", "Quit Typesong", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    Menu::with_items(app, &[&header, &sep1, &mute, &pause, &agent_item, &focus, &all, &styles, &show, &sep2, &quit])
+    let keyboard_hint = MenuItem::with_id(
+        app,
+        "keyboard_hint",
+        "Keyboard is off: run  sudo usermod -aG input $USER  then log out and back in",
+        false,
+        None::<&str>,
+    )?;
+    let mut items: Vec<&dyn IsMenuItem<Wry>> = vec![&header];
+    if cfg!(target_os = "linux") && !st.listening.load(Relaxed) && !st.selftest.load(Relaxed) {
+        items.push(&keyboard_hint);
+    }
+    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &focus, &all, &styles, &show, &sep2, &quit]);
+    Menu::with_items(app, &items)
 }
 
 fn refresh_tray(app: &AppHandle) {

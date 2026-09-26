@@ -40,7 +40,7 @@ Claude Code's activity plays the instrument. Toggle it from the menu bar: **Agen
   name plus an accent (commands = kick, edits = snare, reads = low tone, web = question-mark accent,
   subagents = chord); failures = a low tone and snare; needs-you = chord and two notes; finished = chord.
 
-## Windows (and later Linux): `desktop/`
+## Windows and Linux: `desktop/`
 
 A Tauri app that runs the same engine in a hidden WebView2 window, with a global keyboard listener, tray menu,
 the same agent door on `127.0.0.1:47321`, and hook mode built in (`Typesong.exe --hook`, no Python needed).
@@ -52,3 +52,11 @@ the same agent door on `127.0.0.1:47321`, and hook mode built in (`Typesong.exe 
 - Claude Code hook on Windows: register `"C:\\Users\\<you>\\AppData\\Local\\Typesong\\typesong.exe" --hook` for the
   same seven events as the Mac (see Agent mode above).
 - Icons are drawn with plain paths (`desktop/art/draw-icons.swift`) since Apple's symbols can't ship on Windows.
+
+Linux specifics:
+- Packages: `.deb` and AppImage, uploaded as the `Typesong-Linux-packages` artifact (`.github/workflows/linux.yml`).
+- Keyboard: read from `/dev/input` via evdev, which works on Wayland and X11. It needs the `input` group:
+  `sudo usermod -aG input $USER`, then log out and back in. Without it Typesong falls back to the X11 listener
+  (X11 sessions only) and the tray menu says what to do. Keys map with a US layout.
+- Tray: needs AppIndicator support (built into Ubuntu, Mint, KDE; stock GNOME needs the AppIndicator extension).
+- Claude Code hook: `typesong --hook` (the .deb installs `typesong` on the PATH).

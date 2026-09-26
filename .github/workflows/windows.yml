@@ -29,7 +29,7 @@ jobs:
 
       - name: Build app and installer
         working-directory: desktop
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis
 
       # GitHub's Windows machines have no sound card; give the engine a virtual one so audio can actually run.
       - name: Virtual audio device
