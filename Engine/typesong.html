@@ -706,6 +706,19 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     else knock(at);
   }
 
+  // Music stats for the Mac app's health log (pitches only, never text): lets repetition be spotted without listening.
+  let noteLog = [], beatCount = 0;
+  function musicStats(){
+    const n = noteLog.length;
+    let stats = {notes:n, beats:beatCount};
+    if (n){
+      const counts = {}; let run=1, maxRun=1;
+      noteLog.forEach((m,i)=>{ counts[m]=(counts[m]||0)+1; if (i && m===noteLog[i-1]){ run++; maxRun=Math.max(maxRun,run); } else run=1; });
+      stats = {...stats, pitches:Object.keys(counts).length, top:+(Math.max(...Object.values(counts))/n).toFixed(2), maxRun, range:Math.max(...noteLog)-Math.min(...noteLog)};
+    }
+    noteLog = []; beatCount = 0;
+    return stats;
+  }
   function play(ch, kind, o={}){
     startBand();
     const t=now(), q=style.quant;
@@ -713,6 +726,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     const at = s => q ? Math.max(t+0.003, gridT(s)) : t;
     if (kind==='back'){ if (style.id==='noise') noiseGrain(t, 0.5, 0.08); else noise('highpass',4000,0.03,0.06,0,0.1,t); return; }
     if (kind==='space'){
+      beatCount++;
       if (style.free && ++spaces%4===0) nextFreeChord();
       const s=base; onSpace(at(s), q?chordAt(s):curChord()); later(at(s),()=>spark(.5,.9,'kick')); return;
     }
@@ -749,6 +763,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     if (o.oct) midi += 12*o.oct;
     const vel = (q ? (strong?0.26:0.19) : 0.24) * (ch!==c?1.35:1) * (o.vel ?? 1);
     lead(midi, vel, pan, at(s));
+    noteLog.push(midi);
     notes++;
     later(at(s), ()=>spark((pan+.7)/1.4, 1-(midi-style.root+2)/28, 'note', hueDeg(midi)));
   }
@@ -798,7 +813,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     level(idle);
     ui();
     if (window.TYPESONG_HOST==='mac'){
-      if (++slowCount % 40 === 0){ try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'health', ticks:schedTicks, audio: ctx ? ctx.state : 'none', t: ctx ? +ctx.currentTime.toFixed(2) : 0}); } catch(e){} schedTicks=0; }
+      if (++slowCount % 40 === 0){ try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'health', music: musicStats(), ticks:schedTicks, audio: ctx ? ctx.state : 'none', t: ctx ? +ctx.currentTime.toFixed(2) : 0}); } catch(e){} schedTicks=0; }
       // 7 s after the last sound (longest echo is ~5.5 s), suspend audio and let the app stop ticking
       if (ctx && ctx.state==='running' && !bandOn && !demoTimer && !agentBusy && !agentWorking && performance.now()-Math.max(lastKey, bandStoppedAt) > 7000){
         ctx.suspend();
