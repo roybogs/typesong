@@ -1059,6 +1059,14 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     if (agentQ.length > 160) agentQ.splice(0, agentQ.length-80);   // fell behind: skip ahead
     if (!agentBusy) agentPump();
   }
+  // The spacebar sound (kick, low piano, deep pulse…) lands only at phrase breaks or every 4th word,
+  // and at most once per 1.2 s. On every word it spammed the bass.
+  let agentWords = 0, lastAgentBeat = 0;
+  function agentBeat(phraseEnd, delay){
+    agentWords++;
+    const t = performance.now();
+    if ((phraseEnd || agentWords % 4 === 0) && t - lastAgentBeat > 1200){ lastAgentBeat = t; agentAt(()=>input(' ','space'), delay); }
+  }
   function agentPump(){
     const it = agentQ.shift();
     if (!it){ agentBusy=false; return; }
@@ -1068,13 +1076,13 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     if (it.k==='word'){
       const w = clean(it.w);
       const v = {...it.voice, step: wordStep(w)};
-      if (it.soft){ input(w[0]||'a','char',v); wait = 420; if (Math.random()<0.25) agentAt(()=>input(' ','space'), 200); }   // thinking: sparse and slow
+      if (it.soft){ input(w[0]||'a','char',v); wait = 420; agentBeat(false, 200); }   // thinking: sparse and slow
       else {
         input(w[0]||'a','char',v);
         if (w.length>5) agentAt(()=>input(w[w.length-1],'char',{...it.voice, step: (hash(w.slice(3))%5)-2}), 110);
         const end = w[w.length-1];
         if (/[.,!?]/.test(end)) agentAt(()=>input(end,'char'), 170);
-        agentAt(()=>input(' ','space'), 200);
+        agentBeat(/[.,!?;:]/.test(end), 200);
         wait = 320;
       }
     } else if (it.k==='tool'){
