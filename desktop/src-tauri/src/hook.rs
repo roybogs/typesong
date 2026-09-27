@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 const MAX_TEXT: usize = 4000;
-/// Past this much new transcript in one call (huge tool output, a long gap), skip to the recent part.
+/// More new transcript than this in one call (screenshots, a long gap) is old news: skip it rather than replay it.
 const MAX_READ: u64 = 8 << 20;
+/// The most recent text blocks per call: the music follows what's happening now.
+const MAX_EVENTS: usize = 6;
 
 pub fn run() {
     let mut input = String::new();
@@ -91,12 +93,8 @@ fn new_text(transcript: &str, skip: bool) -> Vec<Value> {
     let Ok(meta) = fs::metadata(transcript) else { return events };
     let size = meta.len();
     let mut start = fs::read_to_string(&off_path).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(size);
-    if skip || start > size {
-        start = size;
-    }
-    let skipped = size - start > MAX_READ;
-    if skipped {
-        start = size - MAX_READ;
+    if skip || start > size || size - start > MAX_READ {
+        start = size; // nothing to replay
     }
     let mut buf = Vec::new();
     if let Ok(mut f) = File::open(transcript) {
@@ -104,11 +102,10 @@ fn new_text(transcript: &str, skip: bool) -> Vec<Value> {
             let _ = f.take(size - start).read_to_end(&mut buf);
         }
     }
-    // whole lines only: leave a half-written last line for next time, and after a skip drop the partial first one
+    // whole lines only: leave a half-written last line for next time
     let end = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
-    let begin = if skipped { buf.iter().position(|&b| b == b'\n').map(|i| i + 1).unwrap_or(end).min(end) } else { 0 };
     let marker = b"\"assistant\"";
-    for line in buf[begin..end].split(|&b| b == b'\n') {
+    for line in buf[..end].split(|&b| b == b'\n') {
         if !line.windows(marker.len()).any(|w| w == marker) {
             continue; // tool output and the like, skipped without parsing
         }
@@ -128,7 +125,8 @@ fn new_text(transcript: &str, skip: bool) -> Vec<Value> {
         }
     }
     let _ = fs::write(&off_path, (start + end as u64).to_string());
-    events
+    let n = events.len();
+    events.split_off(n.saturating_sub(MAX_EVENTS))
 }
 
 /// Offsets for chats untouched in two weeks are dropped (with their locks), so the folder doesn't grow forever.

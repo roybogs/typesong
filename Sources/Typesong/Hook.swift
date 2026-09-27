@@ -7,7 +7,8 @@ import Foundation
 enum Hook {
     static let events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop", "Notification"]
     private static let maxText = 4000
-    private static let maxRead = 8 << 20   // 8 MB per call: past that (huge tool output, a long gap), skip to the recent part
+    private static let maxRead = 8 << 20   // more new transcript than this (screenshots, a long gap) is old news: skip it
+    private static let maxEvents = 6       // the most recent text blocks per call: the music follows what's happening now
     private static let stateDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches/Typesong/agent")
 
     static func run() -> Never {
@@ -62,19 +63,16 @@ enum Hook {
 
         guard let size = ((try? fm.attributesOfItem(atPath: transcript))?[.size] as? NSNumber)?.intValue else { return [] }
         var start = (try? String(contentsOf: offURL, encoding: .utf8)).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? size   // first sighting: don't replay history
-        if skip || start > size || start < 0 { start = size }
-        let skipped = size - start > maxRead
-        if skipped { start = size - maxRead }
+        if skip || start > size || start < 0 || size - start > maxRead { start = size }   // nothing to replay
         guard let fh = FileHandle(forReadingAtPath: transcript) else { return [] }
         defer { try? fh.close() }
         try? fh.seek(toOffset: UInt64(start))
         let chunk = (try? fh.read(upToCount: size - start)) ?? Data()
-        // whole lines only: leave a half-written last line for next time, and after a skip drop the partial first one
+        // whole lines only: leave a half-written last line for next time
         let end = chunk.lastIndex(of: 0x0A).map { chunk.index(after: $0) } ?? chunk.startIndex
-        let begin = skipped ? (chunk.firstIndex(of: 0x0A).map { chunk.index(after: $0) } ?? end) : chunk.startIndex
         var events: [[String: Any]] = []
         let marker = Data("\"assistant\"".utf8)
-        for line in chunk[begin..<max(begin, end)].split(separator: 0x0A) where line.range(of: marker) != nil {   // skip tool output cheaply
+        for line in chunk[chunk.startIndex..<end].split(separator: 0x0A) where line.range(of: marker) != nil {   // skip tool output cheaply
             guard let row = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
                   row["type"] as? String == "assistant",
                   let content = (row["message"] as? [String: Any])?["content"] as? [[String: Any]] else { continue }
@@ -87,7 +85,7 @@ enum Hook {
             }
         }
         try? String(start + chunk.distance(from: chunk.startIndex, to: end)).write(to: offURL, atomically: true, encoding: .utf8)
-        return events
+        return Array(events.suffix(maxEvents))
     }
 
     // Offsets for chats untouched in two weeks are dropped (with their locks), so the folder doesn't grow forever.
