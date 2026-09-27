@@ -74,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         window.contentView = web      // must stay in a window: a detached web view gets its audio cut ('interrupted')
         park()
 
+        loadEngine()
+    }
+
+    private func loadEngine() {
         guard let url = Bundle.main.url(forResource: "index", withExtension: "html") else {
             NSLog("Typesong: engine page missing from the app bundle")
             return
@@ -96,8 +100,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         HealthLog.write("engine page process ended: reloading")
         pageReady = false
         stopClock()
-        if let url = Bundle.main.url(forResource: "index", withExtension: "html") {
-            web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        loadEngine()
+        // If the fresh page never finishes loading (its process died too), try again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self, !self.pageReady else { return }
+            self.webViewWebContentProcessDidTerminate(webView)
         }
     }
 
