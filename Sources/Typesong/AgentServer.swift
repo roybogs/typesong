@@ -58,10 +58,17 @@ final class AgentServer {
             openConnections -= 1
             conn.cancel()
         }
+        // Let the client hang up first. Whichever side closes first holds the port in TIME_WAIT for 30 s, and while
+        // this side held it, a relaunched Typesong couldn't listen again until it cleared.
+        func awaitHangUp() {
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, done, error in
+                if done || error != nil { finish() } else { awaitHangUp() }
+            }
+        }
         func reply(_ status: String) {
             let length = status.hasPrefix("204") ? "" : "Content-Length: 0\r\n"   // a 204 has no body, so no length
             let head = "HTTP/1.1 \(status)\r\n\(length)Connection: close\r\n\r\n"
-            conn.send(content: Data(head.utf8), completion: .contentProcessed { _ in finish() })
+            conn.send(content: Data(head.utf8), completion: .contentProcessed { _ in awaitHangUp() })
         }
         conn.start(queue: .main)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish() }   // a client that stalls gives its slot back

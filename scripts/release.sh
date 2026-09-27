@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Builds a release others can open: signed with Developer ID, notarized by Apple, stapled, packed in a DMG.
+# Builds a release others can open: one binary for Apple Silicon and Intel, signed with Developer ID,
+# notarized by Apple, stapled, packed in a DMG.
 #   scripts/release.sh 1.0.0
 # Needs, once:
 #   1. A "Developer ID Application" certificate in your keychain (Apple Developer Program → Certificates).
@@ -19,7 +20,8 @@ OUT="build/release"; APP="build/Typesong.app"; DMG="$OUT/Typesong-$VERSION.dmg"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 echo "==> Building $VERSION, signed as: $IDENTITY"
-TYPESONG_SIGN_IDENTITY="$IDENTITY" TYPESONG_TIMESTAMP=1 TYPESONG_VERSION="$VERSION" scripts/build.sh
+TYPESONG_SIGN_IDENTITY="$IDENTITY" TYPESONG_TIMESTAMP=1 TYPESONG_VERSION="$VERSION" TYPESONG_UNIVERSAL=1 scripts/build.sh
+lipo -archs "$APP/Contents/MacOS/Typesong" | grep -q x86_64 || { echo "The build is missing the Intel half." >&2; exit 1; }
 
 echo "==> Notarizing the app"
 ditto -c -k --keepParent "$APP" "$OUT/app.zip"

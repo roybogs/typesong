@@ -95,6 +95,12 @@ jobs:
           awk "BEGIN{exit !(${max:-0} > 0)}" || echo "::warning::audio did not run (clock never advanced)"
           [ $fail = 0 ] && echo "Self-test passed." || exit 1
 
+      # The exact crate versions this build used, so a release can be rebuilt from the same dependencies.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cargo-lock
+          path: desktop/src-tauri/Cargo.lock
+
       - uses: actions/upload-artifact@v4
         with:
           name: Typesong-Linux-packages

@@ -10,12 +10,15 @@ cd "$(dirname "$0")/.."
 IDENTITY="${TYPESONG_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}"
 IDENTITY="${IDENTITY:--}"
 BUNDLE_ID="com.miguelmendoza.typesong"
-VERSION="${TYPESONG_VERSION:-0.1.0}"
+VERSION="${TYPESONG_VERSION:-0.1.1}"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
 APP="build/Typesong.app"
 
-swift build -c release --arch arm64
-BIN="$(swift build -c release --arch arm64 --show-bin-path)/Typesong"
+# TYPESONG_UNIVERSAL=1 (set by release.sh) builds one binary for both Apple Silicon and Intel Macs.
+ARCHS=(--arch arm64)
+[[ "${TYPESONG_UNIVERSAL:-0}" == 1 ]] && ARCHS=(--arch arm64 --arch x86_64)
+swift build -c release "${ARCHS[@]}"
+BIN="$(swift build -c release "${ARCHS[@]}" --show-bin-path)/Typesong"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -54,4 +57,4 @@ PLIST
 # Release builds need a secure timestamp for notarization (TYPESONG_TIMESTAMP=1, set by release.sh).
 codesign --force --options runtime ${TYPESONG_TIMESTAMP:+--timestamp} --sign "$IDENTITY" "$APP"
 codesign --verify --strict "$APP"
-echo "Built $APP  version ${VERSION} (${BUILD_NUMBER})  engine ${ENGINE_SHA}"
+echo "Built $APP  version ${VERSION} (${BUILD_NUMBER})  engine ${ENGINE_SHA}  for $(lipo -archs "$APP/Contents/MacOS/Typesong")"

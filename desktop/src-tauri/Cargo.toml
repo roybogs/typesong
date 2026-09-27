@@ -1,6 +1,6 @@
 [package]
 name = "typesong"
-version = "0.1.0"
+version = "0.1.1"
 description = "Turns your typing, and your AI agent's work, into music"
 edition = "2021"
 

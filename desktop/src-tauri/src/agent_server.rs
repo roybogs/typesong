@@ -96,6 +96,17 @@ fn serve(app: &AppHandle, mut s: TcpStream) {
     };
     let length = if status.starts_with("204") { "" } else { "Content-Length: 0\r\n" }; // a 204 has no body
     let _ = s.write_all(format!("HTTP/1.1 {status}\r\n{length}Connection: close\r\n\r\n").as_bytes());
+    // Let the client hang up first: whichever side closes first holds the port in TIME_WAIT for a while, and while
+    // this side held it, a relaunched Typesong could be kept from listening again.
+    let until = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < until {
+        match s.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => {}
+            Err(_) => break,
+        }
+    }
 }
 
 /// Waits for the headers and Content-Length bytes of body. Only POST /event with a JSON body, from a tool on this
