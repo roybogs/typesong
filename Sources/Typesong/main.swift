@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import WebKit
 import CoreGraphics
 
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.startClock()
             self?.js("typesongHost.resetAudio('mac woke')")
         }
+        watchOutputDevice()
         if agentOn || selfTest { agentServer?.start() }
         if CommandLine.arguments.contains("--show") { showWindow() }
     }
@@ -376,9 +378,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         js("typesongHost.setStyle('\(k)')")
     }
 
+    // When the Mac's output changes (AirPods connect, headphones unplug), the web view's audio can stay attached to
+    // the old device and play into nothing. Rebuild the engine's audio on the new device, once things settle.
+    private var outputChange: DispatchWorkItem?
+    private func watchOutputDevice() {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { [weak self] _, _ in
+            guard let self else { return }
+            self.outputChange?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                HealthLog.write("audio output changed: rebuilding audio")
+                self?.js("typesongHost.resetAudio('output changed', true)")
+            }
+            self.outputChange = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)   // AirPods can fire several changes in a row
+        }
+    }
+
     @objc private func toggleMute() {
         muted.toggle()
         js("typesongHost.setMuted(\(muted))")
+        // If the Mac switched outputs while muted (AirPods, headphones), the old audio route is dead: rebuild on unmute.
+        if !muted { HealthLog.write("unmuted: rebuilding audio"); js("typesongHost.resetAudio('unmute', true)") }
         refreshIcon()
     }
 

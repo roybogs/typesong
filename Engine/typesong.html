@@ -818,8 +818,8 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     resetTimes.push(w);
     resetAudio('clock stalled');
   }
-  function resetAudio(reason){
-    if (!ctx || performance.now() - lastResetAt < RESET_GRACE) return;
+  function resetAudio(reason, force){   // force: a real cause (output device changed, unmute), not a stall guess
+    if (!ctx || (!force && performance.now() - lastResetAt < RESET_GRACE)) return;
     lastResetAt = performance.now();
     try { ctx.close(); } catch(e){}
     ctx = null; bandOn = false; bed = null; stalls = 0; clockWall = 0;
