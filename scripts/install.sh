@@ -9,7 +9,12 @@ DEST="/Applications/Typesong.app"
 LAUNCH=1
 [[ "${1:-}" == "--no-launch" ]] && LAUNCH=0
 
-if pgrep -f "$DEST/Contents/MacOS/Typesong" >/dev/null; then
+# The app itself, not a Claude Code hook (the same program run briefly with --hook).
+running=0
+for pid in $(pgrep -f "$DEST/Contents/MacOS/Typesong"); do
+  [[ "$(ps -o args= -p "$pid")" == *--hook* ]] || running=1
+done
+if (( running )); then
   echo "Typesong is running. Quit it from the menu bar (Quit Typesong), then run this again." >&2
   exit 1
 fi
@@ -22,7 +27,12 @@ if [[ -d "$DEST" ]]; then
 fi
 
 rm -rf "$DEST"
-ditto build/Typesong.app "$DEST"
+if ! ditto build/Typesong.app "$DEST"; then
+  echo "Copying the app failed. Restoring the previous version." >&2
+  rm -rf "$DEST"
+  [[ -d build/Typesong.previous.app ]] && ditto build/Typesong.previous.app "$DEST"
+  exit 1
+fi
 
 BUILT_SHA="$(shasum -a 256 build/Typesong.app/Contents/MacOS/Typesong | cut -d' ' -f1)"
 INSTALLED_SHA="$(shasum -a 256 "$DEST/Contents/MacOS/Typesong" | cut -d' ' -f1)"

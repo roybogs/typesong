@@ -14,10 +14,10 @@ mod log;
 
 use rdev::{EventType, Key};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
@@ -71,7 +71,8 @@ fn main() {
     let settings = log::load_settings();
     let shared = Shared::default();
     shared.agent_on.store(settings["agentOn"].as_bool().unwrap_or(false), Relaxed);
-    *shared.scope.lock().unwrap() = settings["agentScope"].as_str().unwrap_or("focus").to_string();
+    let scope = if settings["agentScope"].as_str() == Some("all") { "all" } else { "focus" };
+    *shared.scope.lock().unwrap() = scope.to_string();
     *shared.style.lock().unwrap() = "lofi".into();
     shared.selftest.store(selftest, Relaxed);
 
@@ -172,6 +173,9 @@ fn page_loaded(app: &AppHandle) {
     st.page_ready.store(true, Relaxed);
     st.clock_on.store(true, Relaxed);
     js(app, &format!("typesongHost.setAgentScope('{}')", st.scope.lock().unwrap()));
+    if st.muted.load(Relaxed) {
+        js(app, "typesongHost.setMuted(true)"); // the app's mute wins over a freshly (re)loaded page
+    }
     for e in st.pending.lock().unwrap().drain(..) {
         js(app, &e);
     }
@@ -207,7 +211,8 @@ fn page_message(app: AppHandle, msg: Value) {
             if let Some(s) = msg["style"].as_str() {
                 *st.style.lock().unwrap() = s.to_string();
             }
-            if let Some(m) = msg["muted"].as_bool() {
+            // while loading, the page doesn't know the app's mute yet
+            if let (true, Some(m)) = (st.page_ready.load(Relaxed), msg["muted"].as_bool()) {
                 st.muted.store(m, Relaxed);
             }
             if let Some(t) = msg["tipURL"].as_str() {
@@ -222,7 +227,7 @@ fn page_message(app: AppHandle, msg: Value) {
         }
         "health" => {
             let m = &msg["music"];
-            let music: Vec<String> = ["notes", "pitches", "top", "maxRun", "range", "beats"]
+            let music: Vec<String> = ["notes", "pitches", "top", "maxRun", "range", "beats", "chats", "heard"]
                 .iter()
                 .filter_map(|k| m.get(*k).map(|v| format!("{k}={v}")))
                 .collect();
@@ -259,8 +264,11 @@ fn open_link(url: &str) {
     let result = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
     #[cfg(not(windows))]
     let result = std::process::Command::new("xdg-open").arg(url).spawn();
-    if let Err(e) = result {
-        log::write(&format!("could not open link: {e}"));
+    match result {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait()); // reap the helper so it doesn't linger
+        }
+        Err(e) => log::write(&format!("could not open link: {e}")),
     }
 }
 
@@ -277,7 +285,10 @@ pub(crate) fn agent_event(app: &AppHandle, event: &Value) {
     if st.page_ready.load(Relaxed) {
         js(app, &code);
     } else {
-        st.pending.lock().unwrap().push(code);
+        let mut pending = st.pending.lock().unwrap();
+        if pending.len() < 200 {
+            pending.push(code);
+        }
     }
 }
 
@@ -342,7 +353,7 @@ fn start_keyboard(app: AppHandle) {
     }
     std::thread::spawn(move || {
         set_listening(&app, true);
-        let mut held: HashSet<String> = HashSet::new();
+        let mut held: HashMap<String, Instant> = HashMap::new();
         let listener_app = app.clone();
         if let Err(e) = rdev::listen(move |event| on_key(&listener_app, &mut held, event)) {
             log::write(&format!("keyboard listener failed: {e:?}"));
@@ -360,19 +371,33 @@ fn send_key(app: &AppHandle, ch: &str, kind: &str) {
     js(app, &format!("typesongHost.key({},{})", json!(ch), json!(kind)));
 }
 
-fn on_key(app: &AppHandle, held: &mut HashSet<String>, event: rdev::Event) {
+/// A key that has been "down" this long without repeating was really released: Windows never reports releases for
+/// keys held into the lock screen (Win+L, Ctrl+Alt+Del), and a stuck Win or Ctrl would silence every key after it.
+const STUCK_AFTER: Duration = Duration::from_secs(10);
+
+fn on_key(app: &AppHandle, held: &mut HashMap<String, Instant>, event: rdev::Event) {
     match event.event_type {
         EventType::KeyPress(key) => {
-            if !held.insert(format!("{key:?}")) {
-                return; // held keys auto-repeat; one note per press
+            let (name, now) = (format!("{key:?}"), Instant::now());
+            // a key already down is auto-repeating (one note per press), unless its entry is stale
+            let repeat = held.get(&name).map_or(false, |t| now.duration_since(*t) < STUCK_AFTER);
+            held.insert(name, now);
+            if repeat {
+                return;
             }
-            let has = |names: &[&str]| names.iter().any(|n| held.contains(*n));
+            held.retain(|_, t| now.duration_since(*t) < STUCK_AFTER);
+            let has = |names: &[&str]| names.iter().any(|n| held.contains_key(*n));
             let m = Mods {
                 ctrl: has(&["ControlLeft", "ControlRight"]),
                 alt: has(&["Alt", "AltGr"]),
                 shift: has(&["ShiftLeft", "ShiftRight"]),
                 win: has(&["MetaLeft", "MetaRight"]),
             };
+            // Locking the screen hides the releases that follow: start clean.
+            if (m.win && key == Key::KeyL) || (m.ctrl && m.alt && key == Key::Delete) {
+                held.clear();
+                return;
+            }
             let p = match key {
                 Key::Space => Press::Space,
                 Key::Return | Key::KpReturn => Press::Enter,
@@ -489,6 +514,11 @@ fn toggle_mute(app: &AppHandle) {
     let m = !st.muted.load(Relaxed);
     st.muted.store(m, Relaxed);
     js(app, &format!("typesongHost.setMuted({m})"));
+    if !m {
+        // if the output device changed while muted (headphones, Bluetooth), the old audio route is gone: rebuild it
+        log::write("unmuted: rebuilding audio");
+        js(app, "typesongHost.resetAudio('unmute', true)");
+    }
     refresh_tray(app);
 }
 

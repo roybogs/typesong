@@ -284,7 +284,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     noise('bandpass', Math.min(f*6,6000), 0.025, vel*0.3, pan, 0.05, at, bus, 1.5);
   }
   let visualsOn = window.TYPESONG_HOST !== 'mac', framePending = false;   // the Mac app turns visuals on only while its window is open
-  function setVisible(v){ visualsOn=!!v; if (visualsOn && !framePending){ framePending=true; requestAnimationFrame(frame); } }
+  function setVisible(v){ visualsOn=!!v; if (visualsOn){ ui(); if (!framePending){ framePending=true; requestAnimationFrame(frame); } } }
   const ksCache = new Map(), KS_MAX = 36;   // ~450 KB per note; keep the most recent 36
   function ksBuf(midi){
     const key = midi+'_'+Math.floor(Math.random()*3);          // three takes per note, so repeats never phase against each other
@@ -310,8 +310,11 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     f.type='lowpass'; f.frequency.value=Math.min(1500+vel*1400, hz(midi)*7);
     body.type='peaking'; body.frequency.value=110; body.Q.value=0.9; body.gain.value=6;   // wooden body resonance
     const top=ctx.createBiquadFilter(); top.type='peaking'; top.frequency.value=230; top.Q.value=1.2; top.gain.value=3; body.connect(top);
-    g.gain.setValueAtTime(vel*1.05,at); g.gain.setValueAtTime(vel*1.05,at+dur-0.3);   // quieter, so strums stop pumping the compressor g.gain.linearRampToValueAtTime(0,at+dur);
-    s.connect(body); top.connect(f).connect(g); out(g,pan,send,bus); s.start(at); s.stop(at+dur+0.05);
+    // quieter, so strums stop pumping the compressor; fade out before the 2.4 s pluck buffer ends, so low strings
+    // (which still ring at that point) never stop with a click
+    const end = Math.min(dur, 2.35);
+    g.gain.setValueAtTime(vel*1.05,at); g.gain.setValueAtTime(vel*1.05,at+end-0.3); g.gain.linearRampToValueAtTime(0,at+end);
+    s.connect(body); top.connect(f).connect(g); out(g,pan,send,bus); s.start(at); s.stop(at+end+0.05);
   }
   const strum = (voice, at, vel, gap=0.018, up=false) => (up?[...voice].reverse():voice).forEach((m,i)=>guitar(m, vel*(0.75+Math.random()*0.3), at+i*gap, (i/voice.length-.5)*.2));
   // kalimba: a warm tine with slight beating, a faint inharmonic shimmer, and the soft thud of a thumb
@@ -600,9 +603,10 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   }
   let schedTicks=0;
   function schedTick(){
-    drainAgentTimers(); workPulse();
+    try { drainAgentTimers(); workPulse(); } catch(e){}
     schedTicks++;
     if (!ctx || !bandOn) return;
+    while (gridT(nextStep) < now()-0.05) nextStep++;   // a late tick (busy machine, background tab) skips missed beats instead of stacking them
     while (gridT(nextStep) < now()+0.12){ bandStep(nextStep, Math.max(gridT(nextStep), now())); nextStep++; }
     if (bed && bed.kind==='rain'){
       const lv=bedLevel(), t=now(), r=()=>t+Math.random()*0.025, P=()=>(Math.random()-.5)*1.6, k=0.6+lv;
@@ -775,7 +779,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     if (o.oct) midi += 12*o.oct;
     const vel = (q ? (strong?0.26:0.19) : 0.24) * (ch!==c?1.35:1) * (o.vel ?? 1);
     lead(midi, vel, pan, at(s));
-    noteLog.push(midi);
+    noteLog.push(midi); if (noteLog.length > 2000) noteLog.splice(0, 1000);   // the web version never reads it back
     notes++;
     later(at(s), ()=>spark((pan+.7)/1.4, 1-(midi-style.root+2)/28, 'note', hueDeg(midi)));
   }
@@ -850,7 +854,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       if (performance.now()-bed.bumped > 500) bed.f.frequency.setTargetAtTime(bed.base, now(), bed.kind==='noise'?5:1.2);
     }
     level(idle);
-    ui();
+    if (visualsOn) ui();   // nothing to draw while the desktop window is hidden
     if (window.TYPESONG_HOST==='mac'){
       if (++slowCount % 40 === 0){ try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'health', music: musicStats(), ticks:schedTicks, audio: ctx ? ctx.state : 'none', t: ctx ? +ctx.currentTime.toFixed(2) : 0}); } catch(e){} schedTicks=0; }
       // 7 s after the last sound (longest echo is ~5.5 s), suspend audio and let the app stop ticking
@@ -969,7 +973,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   };
   $('copy').onclick=()=>{
     const b=$('copy'), done=msg=>{ b.textContent=msg; setTimeout(()=>b.textContent='Copy text',1600); };
-    const fallback=()=>{ pad_.focus(); pad_.select(); done('Selected, press ⌘C'); };
+    const fallback=()=>{ pad_.focus(); pad_.select(); done(/Mac|iPhone|iPad/.test(navigator.platform||navigator.userAgent) ? 'Selected, press ⌘C' : 'Selected, press Ctrl+C'); };
     try { navigator.clipboard.writeText(pad_.value).then(()=>done('Copied'), fallback); } catch(e){ fallback(); }
   };
 
@@ -1063,8 +1067,10 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   const agentAt = (fn, ms) => agentTimers.push([performance.now()+ms, fn]);   // same argument order as setTimeout
   function drainAgentTimers(){
     if (!agentTimers.length) return;
-    const t = performance.now();
-    for (let i=agentTimers.length-1; i>=0; i--) if (agentTimers[i][0] <= t){ const fn=agentTimers[i][1]; agentTimers.splice(i,1); fn(); }
+    const t = performance.now(), due = agentTimers.filter(x => x[0] <= t).sort((a,b) => a[0]-b[0]);   // in time order
+    if (!due.length) return;
+    for (let i=agentTimers.length-1; i>=0; i--) if (agentTimers[i][0] <= t) agentTimers.splice(i,1);
+    for (const [,fn] of due){ try { fn(); } catch(e){} }   // one bad event can't stop the clock
   }
   // While the agent works (prompt → stop), soft notes every couple of seconds say "still working" even when
   // no hook events arrive (long thinking or writing with no tool calls). Gives up after 10 quiet minutes.
@@ -1124,8 +1130,10 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   // A word's melodic step comes from the whole word (±1..4), so common first letters don't pin the tune;
   // sentence endings fall, questions rise.
   const wordStep = w => { const end=w[w.length-1]; if (end==='.'||end==='!') return -3; if (end==='?') return 3; return [-4,-3,-2,-1,1,2,3,4][hash(w.toLowerCase())%8]; };   // never 0, so a word never repeats the last note
-  function agentEvent(ev){
-    if (!ev || !ev.type) return;
+  function agentEvent(raw){
+    if (!raw || typeof raw.type !== 'string') return;
+    const str = (v, max) => typeof v === 'string' && v ? v.slice(0, max) : undefined;
+    const ev = {type: raw.type, session: str(raw.session, 200), text: str(raw.text, 20000), tool: str(raw.tool, 100)};
     if (ev.session) heardChats.add(ev.session);
     if (ev.type==='prompt' && ev.session) focusSession = ev.session;
     if (!focusSession && ev.session) focusSession = ev.session;
@@ -1234,7 +1242,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       : 'Typing anywhere on your Mac plays Typesong. Pick a style here or from the menu bar. Password fields are never heard.';
     window.typesongHost = {
       key: (ch, kind) => input(ch, kind),
-      setStyle: k => { const b=document.querySelector(`#styles button[data-style="${k}"]`); if (b) b.click(); },
+      setStyle: k => { if (!STYLES[k] || k==='haze') return; const b=document.querySelector(`#styles button[data-style="${k}"]`); if (b) b.click(); },
       setMuted,
       state: () => ({style:styleKey, muted}),
       stats: () => musicStats(),   // same numbers as the health log; used by tests

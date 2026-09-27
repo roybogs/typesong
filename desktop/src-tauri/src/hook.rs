@@ -5,11 +5,14 @@
 use crate::log::data_dir;
 use serde_json::{json, Value};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 const MAX_TEXT: usize = 4000;
+/// Past this much new transcript in one call (huge tool output, a long gap), skip to the recent part.
+const MAX_READ: u64 = 8 << 20;
 
 pub fn run() {
     let mut input = String::new();
@@ -25,6 +28,7 @@ pub fn run() {
     let mut events = match name {
         "UserPromptSubmit" => {
             new_text(transcript, true);
+            prune_old();
             vec![json!({"type": "prompt"})]
         }
         "PreToolUse" => with(new_text(transcript, false), json!({"type": "tool", "tool": tool})),
@@ -73,17 +77,26 @@ fn fnv(s: &str) -> u64 {
 /// Assistant text and thinking appended since the last call (whole lines only; history is skipped on first sight).
 fn new_text(transcript: &str, skip: bool) -> Vec<Value> {
     let mut events = vec![];
-    if transcript.is_empty() {
+    if transcript.is_empty() || !Path::new(transcript).exists() {
         return events;
     }
-    let Ok(meta) = fs::metadata(transcript) else { return events };
-    let size = meta.len();
     let dir = data_dir().join("agent");
     let _ = fs::create_dir_all(&dir);
     let off_path = dir.join(format!("{:016x}.off", fnv(transcript)));
+    // Parallel tool calls fire several hooks at once: take turns on this transcript, so each bit of text plays once.
+    let lock = File::options().create(true).truncate(false).write(true).open(off_path.with_extension("off.lock"));
+    if let Ok(l) = &lock {
+        let _ = l.lock();
+    }
+    let Ok(meta) = fs::metadata(transcript) else { return events };
+    let size = meta.len();
     let mut start = fs::read_to_string(&off_path).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(size);
     if skip || start > size {
         start = size;
+    }
+    let skipped = size - start > MAX_READ;
+    if skipped {
+        start = size - MAX_READ;
     }
     let mut buf = Vec::new();
     if let Ok(mut f) = File::open(transcript) {
@@ -91,8 +104,14 @@ fn new_text(transcript: &str, skip: bool) -> Vec<Value> {
             let _ = f.take(size - start).read_to_end(&mut buf);
         }
     }
+    // whole lines only: leave a half-written last line for next time, and after a skip drop the partial first one
     let end = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
-    for line in buf[..end].split(|&b| b == b'\n') {
+    let begin = if skipped { buf.iter().position(|&b| b == b'\n').map(|i| i + 1).unwrap_or(end).min(end) } else { 0 };
+    let marker = b"\"assistant\"";
+    for line in buf[begin..end].split(|&b| b == b'\n') {
+        if !line.windows(marker.len()).any(|w| w == marker) {
+            continue; // tool output and the like, skipped without parsing
+        }
         let Ok(row) = serde_json::from_slice::<Value>(line) else { continue };
         if row["type"] != "assistant" {
             continue;
@@ -110,6 +129,21 @@ fn new_text(transcript: &str, skip: bool) -> Vec<Value> {
     }
     let _ = fs::write(&off_path, (start + end as u64).to_string());
     events
+}
+
+/// Offsets for chats untouched in two weeks are dropped (with their locks), so the folder doesn't grow forever.
+fn prune_old() {
+    let Ok(entries) = fs::read_dir(data_dir().join("agent")) else { return };
+    let cutoff = Duration::from_secs(14 * 86_400);
+    for path in entries.flatten().map(|e| e.path()) {
+        let old = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map_or(false, |t| SystemTime::now().duration_since(t).map_or(false, |age| age > cutoff));
+        if old && path.extension().map_or(false, |e| e == "off") {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(path.with_extension("off.lock"));
+        }
+    }
 }
 
 fn post(events: &[Value]) {
@@ -162,28 +196,38 @@ pub fn is_installed() -> bool {
 pub fn install() -> Result<(), String> {
     let path = settings_path().ok_or("no home folder")?;
     let cmd = command().ok_or("can't find the Typesong program")?;
+    // a dotfiles symlink stays a symlink: update the file it points to
+    let path: PathBuf = fs::canonicalize(&path).unwrap_or(path);
     let mut settings = json!({});
-    if let Ok(text) = fs::read_to_string(&path) {
-        if !text.trim().is_empty() {
-            settings = serde_json::from_str::<Value>(&text).map_err(|_| "~/.claude/settings.json isn't valid JSON, so it was left alone")?;
-            if !settings.is_object() {
-                return Err("~/.claude/settings.json isn't a JSON object, so it was left alone".into());
-            }
-            let backup = path.with_extension("json.before-typesong");
-            if !backup.exists() {
-                fs::write(&backup, &text).map_err(|e| e.to_string())?;
-            }
+    let original = match fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("couldn't read ~/.claude/settings.json ({e}), so it was left alone")),
+    };
+    if let Some(text) = original.as_deref().filter(|t| !t.trim().is_empty()) {
+        settings = serde_json::from_str::<Value>(text).map_err(|_| "~/.claude/settings.json isn't valid JSON, so it was left alone")?;
+        if !settings.is_object() {
+            return Err("~/.claude/settings.json isn't a JSON object, so it was left alone".into());
+        }
+        let backup = path.with_extension("json.before-typesong");
+        if !backup.exists() {
+            fs::write(&backup, text).map_err(|e| e.to_string())?;
+            restrict(&backup); // it may hold API keys
         }
     }
     let ours = |h: &Value| {
         let c = h["command"].as_str().unwrap_or("");
         c.contains("claude-hook.py") || c.ends_with("--hook") && c.to_lowercase().contains("typesong")
     };
+    // Never guess at a shape we don't recognize: leave the file alone rather than drop someone's hooks.
     let hooks = settings.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({}));
     if !hooks.is_object() {
-        *hooks = json!({});
+        return Err("the hooks section of ~/.claude/settings.json isn't in the usual shape, so it was left alone".into());
     }
     for ev in EVENTS {
+        if !hooks[ev].is_null() && !hooks[ev].is_array() {
+            return Err(format!("the {ev} hooks in ~/.claude/settings.json aren't in the usual shape, so the file was left alone"));
+        }
         let mut groups: Vec<Value> = hooks[ev].as_array().cloned().unwrap_or_default().into_iter().filter_map(|mut g| {
             let kept: Vec<Value> = g["hooks"].as_array().cloned().unwrap_or_default().into_iter().filter(|h| !ours(h)).collect();
             if kept.is_empty() { return None; }
@@ -196,7 +240,22 @@ pub fn install() -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
+    let permissions = fs::metadata(&path).ok().map(|m| m.permissions());
     let tmp = path.with_extension("json.typesong-tmp");
     fs::write(&tmp, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())?;
+    if let Some(p) = permissions {
+        let _ = fs::set_permissions(&tmp, p); // keep the file as private as it was
+    }
     fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// Owner-only access for a file that may hold secrets (Unix; Windows user folders are private already).
+fn restrict(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }

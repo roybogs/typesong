@@ -5,56 +5,91 @@
 
 use crate::{press, Mods, Press};
 use evdev::{Device, InputEventKind, Key};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::AppHandle;
 
 /// Starts one reader thread per keyboard. Returns false when no keyboard could be opened (usually permissions).
 pub fn start(app: AppHandle) -> bool {
-    let keyboards: Vec<Device> = evdev::enumerate()
-        .map(|(_, d)| d)
-        .filter(|d| {
-            d.supported_keys()
-                .map_or(false, |k| k.contains(Key::KEY_A) && k.contains(Key::KEY_SPACE) && k.contains(Key::KEY_ENTER))
-        })
-        .collect();
-    if keyboards.is_empty() {
+    let open: Arc<Mutex<HashSet<PathBuf>>> = Arc::default();
+    let n = open_new(&app, &open);
+    if n == 0 {
         return false;
     }
-    crate::log::write(&format!("keyboard: reading {} keyboard device(s) via evdev", keyboards.len()));
-    for mut dev in keyboards {
-        let app = app.clone();
+    crate::log::write(&format!("keyboard: reading {n} keyboard device(s) via evdev"));
+    // Keyboards come and go (Bluetooth sleep, a USB replug): look for new ones every few seconds.
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(3));
+        let n = open_new(&app, &open);
+        if n > 0 {
+            crate::log::write(&format!("keyboard: {n} keyboard device(s) connected"));
+        }
+    });
+    true
+}
+
+fn is_keyboard(d: &Device) -> bool {
+    d.supported_keys()
+        .map_or(false, |k| k.contains(Key::KEY_A) && k.contains(Key::KEY_SPACE) && k.contains(Key::KEY_ENTER))
+}
+
+/// Opens the keyboards not already being read. Each gets its own reader thread, which lets go of the device when it
+/// disappears, so the next scan picks it up again once it's back.
+fn open_new(app: &AppHandle, open: &Arc<Mutex<HashSet<PathBuf>>>) -> usize {
+    let Ok(entries) = std::fs::read_dir("/dev/input") else { return 0 };
+    let mut count = 0;
+    for path in entries.flatten().map(|e| e.path()) {
+        let is_event = path.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.starts_with("event"));
+        if !is_event || open.lock().unwrap().contains(&path) {
+            continue;
+        }
+        let Ok(dev) = Device::open(&path) else { continue };
+        if !is_keyboard(&dev) {
+            continue;
+        }
+        open.lock().unwrap().insert(path.clone());
+        count += 1;
+        let (app, open) = (app.clone(), open.clone());
         std::thread::spawn(move || {
-            let mut m = Mods::default();
-            while let Ok(events) = dev.fetch_events() {
-                for ev in events {
-                    let InputEventKind::Key(k) = ev.kind() else { continue };
-                    // value 1 = press, 0 = release, 2 = auto-repeat (ignored: one note per press)
-                    let (down, up) = (ev.value() == 1, ev.value() == 0);
-                    if !down && !up {
-                        continue;
-                    }
-                    match k {
-                        Key::KEY_LEFTCTRL | Key::KEY_RIGHTCTRL => m.ctrl = down,
-                        Key::KEY_LEFTALT | Key::KEY_RIGHTALT => m.alt = down,
-                        Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT => m.shift = down,
-                        Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA => m.win = down,
-                        _ if down => {
-                            let p = match k {
-                                Key::KEY_SPACE => Some(Press::Space),
-                                Key::KEY_ENTER | Key::KEY_KPENTER => Some(Press::Enter),
-                                Key::KEY_BACKSPACE | Key::KEY_DELETE => Some(Press::Back),
-                                _ => us_char(k, m.shift).map(Press::Char),
-                            };
-                            if let Some(p) = p {
-                                press(&app, p, m);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            read(&app, dev);
+            open.lock().unwrap().remove(&path);
         });
     }
-    true
+    count
+}
+
+fn read(app: &AppHandle, mut dev: Device) {
+    let mut m = Mods::default();
+    while let Ok(events) = dev.fetch_events() {
+        for ev in events {
+            let InputEventKind::Key(k) = ev.kind() else { continue };
+            // value 1 = press, 0 = release, 2 = auto-repeat (ignored: one note per press)
+            let (down, up) = (ev.value() == 1, ev.value() == 0);
+            if !down && !up {
+                continue;
+            }
+            match k {
+                Key::KEY_LEFTCTRL | Key::KEY_RIGHTCTRL => m.ctrl = down,
+                Key::KEY_LEFTALT | Key::KEY_RIGHTALT => m.alt = down,
+                Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT => m.shift = down,
+                Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA => m.win = down,
+                _ if down => {
+                    let p = match k {
+                        Key::KEY_SPACE => Some(Press::Space),
+                        Key::KEY_ENTER | Key::KEY_KPENTER => Some(Press::Enter),
+                        Key::KEY_BACKSPACE | Key::KEY_DELETE => Some(Press::Back),
+                        _ => us_char(k, m.shift).map(Press::Char),
+                    };
+                    if let Some(p) = p {
+                        press(app, p, m);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 fn us_char(k: Key, shift: bool) -> Option<char> {

@@ -1,4 +1,5 @@
-//! Health log and settings, kept in the app's data folder (%LOCALAPPDATA%\Typesong on Windows).
+//! Health log and settings, kept in the app's data folder (%LOCALAPPDATA%\Typesong on Windows,
+//! $XDG_DATA_HOME/Typesong or ~/.local/share/Typesong on Linux).
 //! The health log records engine health and pitch statistics only, never keystrokes or text.
 
 use serde_json::Value;
@@ -8,17 +9,26 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn data_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local).join("Typesong");
+    }
+    std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("Typesong")
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Typesong")
 }
 
+/// Kept to about 1 MB (a few days): past that, the file becomes health.prev.log and a new one starts.
 pub fn write(line: &str) {
     let dir = data_dir();
     let _ = fs::create_dir_all(&dir);
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("health.log")) {
+    let path = dir.join("health.log");
+    if fs::metadata(&path).map_or(false, |m| m.len() > 1_000_000) {
+        let _ = fs::rename(&path, dir.join("health.prev.log"));
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{} {}", now_iso(), line);
     }
 }
@@ -30,10 +40,14 @@ pub fn load_settings() -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Written to a temporary file first, so a crash mid-write can't leave half a settings file.
 pub fn save_settings(v: &Value) {
     let dir = data_dir();
     let _ = fs::create_dir_all(&dir);
-    let _ = fs::write(dir.join("settings.json"), v.to_string());
+    let tmp = dir.join("settings.json.tmp");
+    if fs::write(&tmp, v.to_string()).is_ok() {
+        let _ = fs::rename(&tmp, dir.join("settings.json"));
+    }
 }
 
 /// UTC timestamp like 2026-09-26T17:30:00Z, without pulling in a date library.

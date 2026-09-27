@@ -6,6 +6,9 @@ on:
     paths: ["Engine/**", "desktop/**", ".github/workflows/linux.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   linux:
     runs-on: ubuntu-22.04
@@ -51,6 +54,14 @@ jobs:
             --data '[{"type":"prompt","session":"ci"},{"type":"text","text":"Testing agent music on Linux. It should play.","session":"ci"},{"type":"tool","tool":"Bash","session":"ci"},{"type":"stop","session":"ci"}]' \
             http://127.0.0.1:47321/event
           curl -s -o /dev/null -w "non-event path: HTTP %{http_code}\n" http://127.0.0.1:47321/
+          # the agent door refuses web pages, non-JSON and bad lengths, and survives them
+          probe(){ printf "%s %s\n" "$1" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${@:2}")" >> agent-checks.txt; }
+          : > agent-checks.txt
+          probe want403 -X POST -H 'Origin: https://example.com' -H 'Content-Type: application/json' --data '{"type":"tool"}' http://127.0.0.1:47321/event
+          probe want415 -X POST -H 'Content-Type: text/plain' --data '{"type":"tool"}' http://127.0.0.1:47321/event
+          printf 'POST /event HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: -5\r\n\r\n' | nc -w 2 127.0.0.1 47321 | head -1 | awk '{print "want413 " $2}' >> agent-checks.txt
+          probe want204 -X POST -H 'Content-Type: application/json' --data '{"type":"tool","tool":"Read","session":"ci"}' http://127.0.0.1:47321/event
+          cat agent-checks.txt
           echo '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"ci"}' | "$exe" --hook; echo "hook mode exited with $?"
           wait $app || true
           echo "---- health.log ----"; cat "$log"
@@ -79,6 +90,7 @@ jobs:
           grep -q "engine page loaded" "$log" || { echo "::error::engine page never loaded"; fail=1; }
           for t in $ticks; do [ "$t" -ge 180 ] && ok=1; done; [ "${ok:-0}" = 1 ] || { echo "::error::clock too slow: $ticks (want about 200)"; fail=1; }
           [ "${events:-0}" -ge 5 ] || { echo "::error::agent events received: ${events:-0} (want 5)"; fail=1; }
+          while read -r want got; do [ "want$got" = "$want" ] || { echo "::error::agent door: $want, got $got"; fail=1; }; done < agent-checks.txt
           max=$(echo $clocks | tr ' ' '\n' | sort -n | tail -1)
           awk "BEGIN{exit !(${max:-0} > 0)}" || echo "::warning::audio did not run (clock never advanced)"
           [ $fail = 0 ] && echo "Self-test passed." || exit 1

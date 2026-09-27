@@ -6,6 +6,9 @@ on:
     paths: ["Engine/**", "desktop/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     runs-on: windows-latest

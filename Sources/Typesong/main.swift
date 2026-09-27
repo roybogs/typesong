@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var paused = false
     private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? false   // Beta: off until chosen
     private var agentServer: AgentServer?
-    private var agentScope = UserDefaults.standard.string(forKey: "agentScope") ?? "focus"   // "focus" or "all"
+    private var agentScope = UserDefaults.standard.string(forKey: "agentScope") == "all" ? "all" : "focus"
     private var pendingAgent: [[String: Any]] = []
     private let selfTest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--agent-test")
     private var agentEvents = 0
@@ -85,8 +85,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         pageReady = true
         startClock()
         js("typesongHost.setAgentScope('\(agentScope)')")
+        if muted { js("typesongHost.setMuted(true)") }               // the app's mute wins over a freshly (re)loaded page
+        if window.isVisible { js("typesongHost.setVisible(true)") }
         pendingAgent.forEach(agentEvent); pendingAgent.removeAll()
         if CommandLine.arguments.contains("--selftest") { runSelfTest() }
+    }
+
+    // If WebKit's page process dies (memory pressure, a WebKit bug), the engine and the music go with it: load it again.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        HealthLog.write("engine page process ended: reloading")
+        pageReady = false
+        stopClock()
+        if let url = Bundle.main.url(forResource: "index", withExtension: "html") {
+            web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        }
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -94,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         switch type {
         case "state":
             if let s = body["style"] as? String { currentStyle = s }
-            if let m = body["muted"] as? Bool { muted = m }
+            if pageReady, let m = body["muted"] as? Bool { muted = m }   // while loading, the page doesn't know the app's mute yet
             if let t = body["tipURL"] as? String { tipURL = Self.safeLink(t) }
             refreshIcon()
         case "openURL":
@@ -146,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func agentEvent(_ event: [String: Any]) {
         guard agentOn || selfTest else { return }
-        guard pageReady else { pendingAgent.append(event); return }
+        guard pageReady else { if pendingAgent.count < 200 { pendingAgent.append(event) }; return }
         guard let data = try? JSONSerialization.data(withJSONObject: event), let json = String(data: data, encoding: .utf8) else { return }
         agentEvents += 1
         startClock()
@@ -232,6 +244,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         refreshIcon()
     }
 
+    private func removeTap() {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
+        if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
+        tap = nil
+        tapSource = nil
+    }
+
     private func handle(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -311,6 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        // Input Monitoring can be switched off while Typesong runs; the listener then hears nothing. Show it, and
+        // wait for the permission to come back.
+        if tap != nil && !CGPreflightListenEventAccess() { removeTap(); startListening() }
         let status: String
         if tap == nil { status = "Needs Input Monitoring permission" }
         else if paused { status = "Paused" }
@@ -481,16 +503,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 }
 
 enum HealthLog {
+    private static let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Typesong")
     private static let url: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Typesong")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("health.log")
     }()
+    private static let stamp = ISO8601DateFormatter()
 
-    // Only engine health goes here (timer rate, audio state). Never keystrokes.
+    // Only engine health goes here (timer rate, audio state, pitch counts). Never keystrokes or text.
+    // Kept to about 1 MB (a few days): past that, the file becomes health.prev.log and a new one starts.
     static func write(_ line: String) {
-        let stamp = ISO8601DateFormatter().string(from: Date())
-        guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
+        guard let data = "\(stamp.string(from: Date())) \(line)\n".data(using: .utf8) else { return }
+        let fm = FileManager.default
+        if ((try? fm.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0 > 1_000_000 {
+            let prev = dir.appendingPathComponent("health.prev.log")
+            try? fm.removeItem(at: prev)
+            try? fm.moveItem(at: url, to: prev)
+        }
         if let h = try? FileHandle(forWritingTo: url) {
             h.seekToEndOfFile(); h.write(data); try? h.close()
         } else {
