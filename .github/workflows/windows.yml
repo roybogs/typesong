@@ -45,6 +45,7 @@ jobs:
           $exe = Resolve-Path "desktop/src-tauri/target/release/typesong.exe"
           $log = Join-Path $env:LOCALAPPDATA "Typesong/health.log"
           if (Test-Path $log) { Remove-Item $log }
+          New-Item -ItemType Directory -Force (Join-Path $env:USERPROFILE ".codex/sessions") | Out-Null   # Codex installed, no sessions yet
           $app = Start-Process $exe -ArgumentList "--selftest","--exit-after","45" -PassThru
           Start-Sleep -Seconds 15
           $body = '[{"type":"prompt","session":"ci"},{"type":"text","text":"Testing agent music on Windows. It should play.","session":"ci"},{"type":"tool","tool":"Bash","session":"ci"},{"type":"stop","session":"ci"}]'
@@ -52,6 +53,12 @@ jobs:
           try { Invoke-WebRequest -Uri "http://127.0.0.1:47321/" -UseBasicParsing } catch { Write-Host "non-event path rejected as expected: $($_.Exception.Response.StatusCode)" }
           '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"ci"}' | & $exe --hook | Out-Null
           Write-Host "hook mode exited with $LASTEXITCODE"
+          # a Codex session that starts now plays with no setup: turn start, a command, a reply, turn end (4 events)
+          $day = Join-Path $env:USERPROFILE (".codex/sessions/" + (Get-Date -Format "yyyy/MM/dd")); New-Item -ItemType Directory -Force $day | Out-Null
+          @('{"type":"event_msg","payload":{"type":"task_started"}}', '{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec"}}',
+            '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex says hi"}]}}',
+            '{"type":"event_msg","payload":{"type":"task_complete"}}') -join "`n" | Set-Content -NoNewline (Join-Path $day "rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-00000000c0de.jsonl")
+          Add-Content -NoNewline -Value "`n" (Join-Path $day "rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-00000000c0de.jsonl")
           $app.WaitForExit(90000) | Out-Null
           Write-Host "---- health.log ----"
           Get-Content $log
@@ -81,7 +88,7 @@ jobs:
           $fail = @()
           if (-not ($lines -match "engine page loaded")) { $fail += "engine page never loaded" }
           if (($ticks | Where-Object { $_ -ge 180 }).Count -lt 1) { $fail += "clock too slow: ticks/5s = $($ticks -join ', ') (want about 200)" }
-          if ($events.Maximum -lt 5) { $fail += "agent events received: $($events.Maximum) (want 5: 4 posted + 1 from hook mode)" }
+          if ($events.Maximum -lt 9) { $fail += "agent events received: $($events.Maximum) (want 9: 4 posted + 1 from hook mode + 4 from Codex)" }
           Write-Host "ticks/5s: $($ticks -join ', ')"
           Write-Host "agent events: $($events.Maximum)"
           Write-Host "audio clock: $($clocks -join ', ') (running in $audio of $($health.Count) windows)"

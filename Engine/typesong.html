@@ -856,7 +856,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     level(idle);
     if (visualsOn) ui();   // nothing to draw while the desktop window is hidden
     if (window.TYPESONG_HOST==='mac'){
-      if (++slowCount % 40 === 0){ try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'health', music: musicStats(), ticks:schedTicks, audio: ctx ? ctx.state : 'none', t: ctx ? +ctx.currentTime.toFixed(2) : 0}); } catch(e){} schedTicks=0; }
+      if (++slowCount % 40 === 0){ try { window.webkit?.messageHandlers?.typesong?.postMessage({type:'health', music: musicStats(), ticks:schedTicks, audio: ctx ? ctx.state : 'none', t: ctx ? +ctx.currentTime.toFixed(2) : 0, muted, out: Math.round(outPeak)}); } catch(e){} schedTicks=0; outPeak=-120; }   // out: loudest moment (dB) in the last 5 s
       // 7 s after the last sound (longest echo is ~5.5 s), suspend audio and let the app stop ticking
       if (ctx && ctx.state==='running' && !bandOn && !demoTimer && !agentBusy && !agentWorking && performance.now()-Math.max(lastKey, bandStoppedAt) > 7000){
         ctx.suspend();
@@ -866,14 +866,20 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   }
   // Every style aims for the same loudness. The trim only learns while you are typing (so pauses and reverb tails
   // never get pumped up), moves at most ~1.5 dB a second, stays within ±9 dB, and is remembered per style.
-  const TARGET_DB = -21, agc = {}; let meterBuf = null;
-  const levelKey = () => styleKey + (styleKey==='ambient' ? eVoice : styleKey==='noise' ? noiseColor : styleKey==='free' ? instrument : '');
-  function level(idle){
-    if (!ctx || !meter || muted) return;
+  const TARGET_DB = -21, agc = {}; let meterBuf = null, outPeak = -120;
+  // Loudness of what actually leaves the engine (after mute, trim and compressor), for leveling and the health log.
+  function outDb(){
+    if (!ctx || !meter) return -120;
     meterBuf = meterBuf || new Float32Array(meter.fftSize);
     meter.getFloatTimeDomainData(meterBuf);
     let sum=0; for (let i=0;i<meterBuf.length;i++) sum+=meterBuf[i]*meterBuf[i];
-    const db = 10*Math.log10(sum/meterBuf.length + 1e-12), k = levelKey();
+    return 10*Math.log10(sum/meterBuf.length + 1e-12);
+  }
+  const levelKey = () => styleKey + (styleKey==='ambient' ? eVoice : styleKey==='noise' ? noiseColor : styleKey==='free' ? instrument : '');
+  function level(idle){
+    const db = outDb(); outPeak = Math.max(outPeak, db);
+    if (!ctx || !meter || muted) return;
+    const k = levelKey();
     if (agc[k]===undefined) agc[k]=0;
     const target = TARGET_DB - (styleKey==='noise' ? 8 : 0);
     if ((idle < 2500 || styleKey==='noise') && db > -50) agc[k] = Math.max(-9, Math.min(9, agc[k] + Math.max(-0.18, Math.min(0.18, (target-db)*0.03))));   // noise is steady, so it can level even while you pause

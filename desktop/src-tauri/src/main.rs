@@ -7,6 +7,7 @@
 //! keys play notes too, and are still never recorded.
 
 mod agent_server;
+mod codex;
 mod hook;
 #[cfg(target_os = "linux")]
 mod keys_linux;
@@ -103,6 +104,7 @@ fn main() {
                 log::write(&format!("tray icon unavailable, music continues without it: {e}"));
             }
             agent_server::start(handle.clone());
+            codex::start(handle.clone());
             start_clock(handle.clone());
             if !selftest {
                 start_keyboard(handle.clone());
@@ -231,11 +233,15 @@ fn page_message(app: AppHandle, msg: Value) {
                 .iter()
                 .filter_map(|k| m.get(*k).map(|v| format!("{k}={v}")))
                 .collect();
+            // muted=app/page (they should always agree); out = the loudest the engine got in the last 5 s, in dB
             log::write(&format!(
-                "ticks/5s={} audio={} clock={} style={} listening={} paused={} agentEvents={} | {}",
+                "ticks/5s={} audio={} clock={} out={}dB muted={}/{} style={} listening={} paused={} agentEvents={} | {}",
                 msg["ticks"],
                 msg["audio"].as_str().unwrap_or("?"),
                 msg["t"],
+                msg["out"],
+                st.muted.load(Relaxed),
+                msg["muted"],
                 st.style.lock().unwrap(),
                 st.listening.load(Relaxed),
                 st.paused.load(Relaxed),
@@ -454,7 +460,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let header = MenuItem::with_id(app, "status", status, false, None::<&str>)?;
     let mute = CheckMenuItem::with_id(app, "mute", "Mute (Ctrl+Alt+Shift+M)", true, muted, None::<&str>)?;
     let pause = CheckMenuItem::with_id(app, "pause", "Pause listening to my typing", true, paused, None::<&str>)?;
-    let agent_item = CheckMenuItem::with_id(app, "agent", "Agent music for Claude Code (Beta)", true, agent, None::<&str>)?;
+    let agent_item = CheckMenuItem::with_id(app, "agent", "Agent music (Beta)", true, agent, None::<&str>)?;
     let connected = hook::is_installed();
     let connect_label = match st.connect_error.lock().unwrap().clone() {
         Some(e) => format!("    Couldn't connect Claude Code: {e}"),
@@ -462,6 +468,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None => "    Connect Claude Code (adds hooks to ~/.claude/settings.json)".to_string(),
     };
     let connect = MenuItem::with_id(app, "connect", connect_label, agent && !connected, None::<&str>)?;
+    // Codex is followed through its session files: nothing to set up
+    let codex_item = MenuItem::with_id(app, "codex", "    Codex is connected ✓", false, None::<&str>)?;
     let focus = CheckMenuItem::with_id(app, "scope_focus", "    Only my latest chat", agent, scope == "focus", None::<&str>)?;
     let all = CheckMenuItem::with_id(app, "scope_all", "    All chats, each in its own spot", agent, scope == "all", None::<&str>)?;
     let style_items: Vec<CheckMenuItem<Wry>> = STYLES
@@ -487,7 +495,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     if cfg!(target_os = "linux") && !st.listening.load(Relaxed) && !st.selftest.load(Relaxed) {
         items.push(&keyboard_hint);
     }
-    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &connect, &focus, &all, &styles, &show]);
+    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &mute, &pause, &agent_item, &connect]);
+    if agent && codex::available() {
+        items.push(&codex_item);
+    }
+    items.extend([&focus as &dyn IsMenuItem<Wry>, &all, &styles, &show]);
     if has_tip {
         items.push(&tip);
     }
@@ -514,7 +526,9 @@ fn toggle_mute(app: &AppHandle) {
     let m = !st.muted.load(Relaxed);
     st.muted.store(m, Relaxed);
     js(app, &format!("typesongHost.setMuted({m})"));
-    if !m {
+    if m {
+        log::write("muted");
+    } else {
         // if the output device changed while muted (headphones, Bluetooth), the old audio route is gone: rebuild it
         log::write("unmuted: rebuilding audio");
         js(app, "typesongHost.resetAudio('unmute', true)");

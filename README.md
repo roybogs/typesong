@@ -3,7 +3,8 @@
 **Turns your typing into music.** Every key plays a note tuned to the chord underneath, the spacebar keeps the
 beat, and your speed sets the energy. Stop typing and it settles.
 
-Typesong lives in your menu bar (or system tray) and plays along with whatever you type, in any app.
+Typesong lives in your menu bar (or system tray) and plays along with whatever you type, in any app. It can
+also play your AI coding agent at work (Claude Code and Codex).
 It's free, and it stays free.
 
 https://github.com/user-attachments/assets/ed112963-0f5a-4fe1-963c-dc349358643a
@@ -32,16 +33,22 @@ accepts is from your own machine (`127.0.0.1`), for agent music.
 - A small health log (tick rate, audio state, note-pitch counts; never keys or text) is kept locally:
   `~/Library/Logs/Typesong/health.log` on Mac, `%LOCALAPPDATA%\Typesong` on Windows, `~/.local/share/Typesong` on Linux.
 
-## Agent music for Claude Code (Beta)
+## Agent music (Beta)
 
-Typesong can also play what [Claude Code](https://claude.com/claude-code) is doing: words it writes play like
-typing, each tool it runs gets a short motif, and a chord tells you when it's done.
+Typesong can also play what your AI coding agent is doing: words it writes play like typing, each tool it runs gets
+a short motif, and a chord tells you when it's done. Turn on **Agent music (Beta)** in the menu.
 
-Turn on **Agent music for Claude Code (Beta)** in the menu, then choose **Connect Claude Code**. That adds
-Typesong's hooks to `~/.claude/settings.json` (your other settings are kept, and the original file is saved as
-`settings.json.before-typesong`). New Claude Code chats will play; chats already open need a restart.
+- **[Claude Code](https://claude.com/claude-code):** choose **Connect Claude Code**. That adds Typesong's hooks to
+  `~/.claude/settings.json` (your other settings are kept, and the original file is saved as
+  `settings.json.before-typesong`). New Claude Code chats will play; chats already open need a restart.
+- **[Codex](https://github.com/openai/codex):** nothing to set up. Codex (the CLI, the IDE extension and the app)
+  writes each session to `~/.codex/sessions` as it works, and Typesong follows those files. Codex's own settings are
+  never touched.
 
-Headless runs can play word by word as they stream:
+Everything stays on your machine: the agent's text only becomes notes, and is never stored or sent anywhere.
+**Only my latest chat** plays the chat you last prompted; **All chats** plays every chat at once, each in its own spot.
+
+Headless Claude Code runs can play word by word as they stream:
 
 ```bash
 claude -p "…" --output-format stream-json --include-partial-messages --verbose | agent/claude-stream.py
@@ -88,9 +95,10 @@ Linux notes:
 - `desktop/` is the Windows/Linux host (Tauri, Rust): a global keyboard listener, tray menu and hidden webview.
 - **The app drives the page's clock.** Hidden webviews throttle timers to about once a second, which would break
   the beat, so the host calls `typesongHost.tick()` every 25 ms, and lets the audio sleep after 7 s of quiet.
-- **Agent music** listens on `127.0.0.1:47321` for `POST /event` JSON (anything else gets a 404). The Claude Code
-  hook is the app itself run as `Typesong --hook`: it reads the hook's JSON, picks up new assistant text from
-  the session transcript, and posts small events. It prints nothing and always exits 0, so it can't block Claude Code.
+- **Agent music** listens on `127.0.0.1:47321` for `POST /event` JSON from local tools (web pages and anything that
+  isn't JSON are refused). The Claude Code hook is the app itself run as `Typesong --hook`: it reads the hook's
+  JSON, picks up new assistant text from the session transcript, and posts small events. It prints nothing and
+  always exits 0, so it can't block Claude Code. Codex needs no hook: the app follows its session files directly.
 - `Typesong --selftest` feeds synthetic keys with no window and no permission prompt, and logs engine health.
 
 ## Support

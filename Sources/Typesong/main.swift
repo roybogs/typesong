@@ -29,10 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var paused = false
     private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? false   // Beta: off until chosen
     private var agentServer: AgentServer?
+    private var codex: CodexWatcher?
     private var agentScope = UserDefaults.standard.string(forKey: "agentScope") == "all" ? "all" : "focus"
     private var pendingAgent: [[String: Any]] = []
     private let selfTest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--agent-test")
     private var agentEvents = 0
+    private var codexEvents = 0   // how many of those came from Codex, for the health log
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep the audio clock and scheduler at full speed while the app sits in the background.
@@ -41,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         buildStatusItem()
         if !selfTest { startListening() }          // the self-test never triggers the permission prompt
         agentServer = AgentServer { [weak self] event in self?.agentEvent(event) }
+        codex = CodexWatcher { [weak self] event in self?.codexEvents += 1; self?.agentEvent(event) }
         // After the Mac wakes, the audio clock can come back frozen; rebuild the engine's audio right away.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             HealthLog.write("mac woke: resetting audio")
@@ -49,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         watchOutputDevice()
         if agentOn || selfTest { agentServer?.start() }
+        if agentOn { codex?.start() }
         if CommandLine.arguments.contains("--show") { showWindow() }
     }
 
@@ -129,7 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let ticks = body["ticks"] as? Int ?? 0, audio = body["audio"] as? String ?? "?", t = body["t"] as? Double ?? 0
             let m = body["music"] as? [String: Any] ?? [:]
             let music = ["notes", "pitches", "top", "maxRun", "range", "beats", "chats", "heard"].compactMap { k in m[k].map { "\(k)=\($0)" } }.joined(separator: " ")
-            HealthLog.write("ticks/5s=\(ticks) audio=\(audio) clock=\(t) style=\(currentStyle) listening=\(tap != nil) paused=\(paused) agentEvents=\(agentEvents) | \(music)")
+            // muted=app/page (they should always agree); out = the loudest the engine got in the last 5 s, in dB
+            let out = (body["out"] as? NSNumber).map { "\($0)dB" } ?? "?", pageMuted = (body["muted"] as? Bool).map { "\($0)" } ?? "?"
+            HealthLog.write("ticks/5s=\(ticks) audio=\(audio) clock=\(t) out=\(out) muted=\(muted)/\(pageMuted) style=\(currentStyle) listening=\(tap != nil) paused=\(paused) agentEvents=\(agentEvents) codex=\(codexEvents) | \(music)")
         default: break
         }
     }
@@ -182,9 +188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func toggleAgent() {
         agentOn.toggle()
         UserDefaults.standard.set(agentOn, forKey: "agentMode")
-        if agentOn { agentServer?.start() } else { agentServer?.stop() }
+        if agentOn { agentServer?.start(); codex?.start() } else { agentServer?.stop(); codex?.stop() }
         refreshIcon()
-        if agentOn && !Hook.isInstalled(command: hookCommand) { DispatchQueue.main.async { self.setUpClaude() } }
+        // Offer to connect Claude Code only to someone who has it (Codex needs no setup).
+        let hasClaude = FileManager.default.fileExists(atPath: Hook.settingsURL.deletingLastPathComponent().path)
+        if agentOn && hasClaude && !Hook.isInstalled(command: hookCommand) { DispatchQueue.main.async { self.setUpClaude() } }
     }
 
     // The hook is this app run with --hook, so it works without Python or a copy of the repo.
@@ -360,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         mute.keyEquivalentModifierMask = [.command, .option, .control]
         menu.addItem(mute)
         menu.addItem(item(paused ? "Resume listening to my typing" : "Pause listening to my typing", #selector(togglePause)))
-        let agent = item("Agent music for Claude Code (Beta)", #selector(toggleAgent))
+        let agent = item("Agent music (Beta)", #selector(toggleAgent))
         agent.state = agentOn ? .on : .off
         menu.addItem(agent)
         if agentOn {
@@ -368,6 +376,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let setup = item(setUp ? "Claude Code is connected ✓" : "Connect Claude Code…", #selector(setUpClaude))
             setup.indentationLevel = 1
             menu.addItem(setup)
+            if codex?.available == true {   // Codex is followed through its session files: nothing to set up
+                let c = NSMenuItem(title: "Codex is connected ✓", action: nil, keyEquivalent: "")
+                c.isEnabled = false
+                c.indentationLevel = 1
+                menu.addItem(c)
+            }
             for (scope, title) in [("focus", "Only my latest chat"), ("all", "All chats, each in its own spot")] {
                 let i = item(title, #selector(pickAgentScope(_:)))
                 i.representedObject = scope
@@ -429,7 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         muted.toggle()
         js("typesongHost.setMuted(\(muted))")
         // If the Mac switched outputs while muted (AirPods, headphones), the old audio route is dead: rebuild on unmute.
-        if !muted { HealthLog.write("unmuted: rebuilding audio"); js("typesongHost.resetAudio('unmute', true)") }
+        if muted { HealthLog.write("muted") } else { HealthLog.write("unmuted: rebuilding audio"); js("typesongHost.resetAudio('unmute', true)") }
         refreshIcon()
     }
 
