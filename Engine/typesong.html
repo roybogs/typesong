@@ -632,6 +632,9 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
 
   // ---- cadence ----
   const times=[]; let wpmSmooth=0, energy=0, lastKey=0, notes=0, rested=true, wpmNow=0, gpos=7;
+  // When the agent finishes (and you aren't typing), the band ends with its "done" chord instead of playing on.
+  let userKeyAt=0, agentEnding=false, endBandAt=0;
+  const userTyped = () => { userKeyAt=performance.now(); agentEnding=false; endBandAt=0; };
   function cadence(t){
     times.push(t); while(times.length>12) times.shift();
     if (times.length>2){
@@ -732,7 +735,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     return stats;
   }
   function play(ch, kind, o={}){
-    startBand();
+    if (!agentEnding) startBand();   // the agent's outro doesn't restart a band that's winding down
     const t=now(), q=style.quant;
     const base = q ? Math.max(0, Math.ceil((t-t0)/sd()-0.25)) : 0;
     const at = s => q ? Math.max(t+0.003, gridT(s)) : t;
@@ -796,7 +799,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   const save = () => { try { localStorage.setItem('typesong-draft', pad_.value); } catch(e){} };
   pad_.addEventListener('keydown', e=>{ if(!e.repeat) audio(); });
   pad_.addEventListener('beforeinput', e=>{
-    const t=e.inputType;
+    const t=e.inputType; userTyped();
     if (t==='insertLineBreak'||t==='insertParagraph') return input('\n','enter');
     if (t.startsWith('delete')) return input('','back');
     if (t==='insertText' && e.data){ const ch=e.data.slice(-1); input(ch, ch===' '?'space':'char'); }
@@ -833,7 +836,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   function slowTick(){
     watchClock();
     const idle = performance.now()-lastKey;
-    if (style.free && ctx && lastKey && !rested && idle>1600){
+    if (style.free && ctx && lastKey && !rested && !agentEnding && idle>1600){   // the agent's done chord already resolved it
       rested=true; const c=curChord(), v=instrument, t=now();
       if (v==='guitar') strum(c.voice, t, 0.14, 0.05);
       else if (v==='piano') rolled(c.voice.slice(1), t, 0.08, 0.08, master, 0.5);
@@ -842,6 +845,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       spark(.5,.5,'chord');
     }
     if (bandOn && idle>style.linger*1000) stopBand(style.bed?3:1.5);
+    if (bandOn && endBandAt && performance.now() >= endBandAt){ stopBand(style.bed?2.5:1.8); endBandAt=0; }
     if (idle>600){ energy*=0.9; if(idle>1500) wpmNow=Math.round(wpmNow*0.85); }
     wpmSmooth += ((idle>1500?0:wpmNow) - wpmSmooth) * (idle>1500?0.04:0.12);
     { const tgt = rainCurve(idle>1500 ? 0 : wpmSmooth); rainLvl += (tgt-rainLvl) * (tgt>rainLvl ? 0.012 : 0.02); }   // ~10 s to build, ~6 s to ease off
@@ -1146,6 +1150,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
     if (agentScope==='focus' && ev.session && ev.session!==focusSession && ev.type!=='notify') return;
     const voice = sessionVoice(ev.session);
     const sid = ev.session || '-', wasIdle = !working.size;
+    if (ev.type!=='stop' && ev.type!=='notify'){ agentEnding=false; endBandAt=0; }   // work resumed: no ending
     if (ev.type==='prompt' && agentScope==='focus') working.clear();   // focus: only the new chat counts now
     if (ev.type==='stop') working.delete(sid);
     else if (ev.type!=='notify') working.set(sid, {voice, last: performance.now()});
@@ -1170,6 +1175,12 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       const coda = words.length > 6 ? Array.from({length:6}, (_,i)=>words[Math.floor(i*words.length/6)]) : words;
       coda.forEach(it => it.soft = true);   // soft = one quiet note per word, no ornaments or beats
       agentQ.length = 0;
+      // Nothing else going on (no other chat working, you're not typing): the band lets the chord land, then fades
+      // under the short outro, instead of holding for its usual linger. That silence is what says "done".
+      if (!working.size && (!userKeyAt || performance.now()-userKeyAt > 4000)){
+        agentEnding = true;
+        endBandAt = performance.now() + 1200;
+      }
       input('\n','enter');
       spark(.5,.5,'chord');
       if (coda.length){ agentQ.push({k:'rest', ms:700}, ...coda); if (!agentBusy) agentPump(); }
@@ -1247,7 +1258,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
       ? 'Typing anywhere on your PC plays Typesong. Pick a style here or from the tray icon. Keys only become notes and are never recorded.'
       : 'Typing anywhere on your Mac plays Typesong. Pick a style here or from the menu bar. Password fields are never heard.';
     window.typesongHost = {
-      key: (ch, kind) => input(ch, kind),
+      key: (ch, kind) => { userTyped(); input(ch, kind); },
       setStyle: k => { if (!STYLES[k] || k==='haze') return; const b=document.querySelector(`#styles button[data-style="${k}"]`); if (b) b.click(); },
       setMuted,
       state: () => ({style:styleKey, muted}),
