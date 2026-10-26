@@ -19,8 +19,8 @@ Seven styles: **Lofi**, **Late night**, **Ambient** (bells, glass or hum), **Eth
 ## Try it
 
 - **In your browser:** [roybogs.github.io/typesong](https://roybogs.github.io/typesong/) (plays while you type in the page).
-- **Windows and Linux:** [download the latest release](https://github.com/roybogs/typesong/releases/latest) to hear it in every app.
-- **Mac:** a signed build is on its way. Until then, build it from source (below).
+- **Mac, Windows and Linux:** [download the latest release](https://github.com/roybogs/typesong/releases/latest) to hear it in every app.
+  The Mac DMG is signed and notarized and runs on Apple Silicon and Intel (macOS 14+).
 
 ## Privacy
 
@@ -56,7 +56,7 @@ claude -p "…" --output-format stream-json --include-partial-messages --verbose
 
 ## Build from source
 
-### Mac (macOS 14+, Apple Silicon)
+### Mac (macOS 14+)
 
 ```bash
 scripts/install.sh
@@ -67,7 +67,8 @@ Monitoring** permission the first time. Quit Typesong from its menu before reins
 
 Signing: the build uses your first "Apple Development" certificate if you have one, so the permission survives
 rebuilds. Without one it signs ad hoc, and macOS asks for the permission again after each rebuild.
-`scripts/release.sh <version>` makes a notarized DMG (needs a Developer ID certificate).
+`scripts/release.sh <version>` makes a notarized DMG for Apple Silicon and Intel (needs full Xcode and a Developer ID
+certificate; the script says what is missing).
 
 ### Windows and Linux
 

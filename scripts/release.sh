@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: scripts/release.sh <version>, e.g. 1.0.0}"
 PROFILE="${TYPESONG_NOTARY_PROFILE:-typesong-notary}"
+# One binary for both chips needs full Xcode; the Command Line Tools alone can't build two architectures at once.
+[[ "$(xcode-select -p 2>/dev/null)" == *Xcode*.app* ]] || { echo "Full Xcode is needed (App Store), then: sudo xcode-select -s /Applications/Xcode.app" >&2; exit 1; }
 IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
 [[ -n "$IDENTITY" ]] || { echo "No 'Developer ID Application' certificate in the keychain. Create one at developer.apple.com → Certificates, then rerun." >&2; exit 1; }
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || { echo "Notary profile '$PROFILE' not found or not working. Run: xcrun notarytool store-credentials $PROFILE --apple-id <you> --team-id <team>" >&2; exit 1; }
@@ -46,3 +48,4 @@ spctl --assess --type execute --verbose=2 "$APP"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 shasum -a 256 "$DMG" | tee "$DMG.sha256"
 echo "Ready: $DMG"
+echo "To publish it: gh release upload v$VERSION \"$DMG\""
