@@ -35,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let selfTest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--agent-test")
     private var agentEvents = 0
     private var codexEvents = 0   // how many of those came from Codex, for the health log
+    private var rebuildsSinceLoad = 0   // audio engine rebuilds in the current page; each leaves memory behind
+    private var freshPage = false       // a recycled page: nothing is playing, so don't start the clock yet
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep the audio clock and scheduler at full speed while the app sits in the background.
@@ -59,17 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: Web engine
 
     private func buildWindow() {
-        let config = WKWebViewConfiguration()
-        config.mediaTypesRequiringUserActionForPlayback = []
-        config.preferences.inactiveSchedulingPolicy = .none      // never throttle timers when the window is hidden
-        let bridge = WKUserScript(source: "window.TYPESONG_HOST='mac';", injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        config.userContentController.addUserScript(bridge)
-        config.userContentController.add(self, name: "typesong")
-
-        web = WKWebView(frame: NSRect(x: 0, y: 0, width: 920, height: 780), configuration: config)
-        web.navigationDelegate = self
-        web.setValue(false, forKey: "drawsBackground")
-
+        web = makeWebView()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 780),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Typesong"
@@ -81,7 +73,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         loadEngine()
     }
 
+    private func makeWebView() -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.preferences.inactiveSchedulingPolicy = .none      // never throttle timers when the window is hidden
+        let bridge = WKUserScript(source: "window.TYPESONG_HOST='mac';", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        config.userContentController.addUserScript(bridge)
+        config.userContentController.add(self, name: "typesong")
+
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 920, height: 780), configuration: config)
+        view.navigationDelegate = self
+        view.setValue(false, forKey: "drawsBackground")
+        return view
+    }
+
     private func loadEngine() {
+        rebuildsSinceLoad = 0
         guard let url = Bundle.main.url(forResource: "index", withExtension: "html") else {
             NSLog("Typesong: engine page missing from the app bundle")
             return
@@ -91,7 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pageReady = true
-        startClock()
+        if !freshPage { startClock() }   // a recycled page waits for the next key or agent event to start it
+        freshPage = false
         js("typesongHost.setAgentScope('\(agentScope)')")
         if muted { js("typesongHost.setMuted(true)") }               // the app's mute wins over a freshly (re)loaded page
         if window.isVisible { js("typesongHost.setVisible(true)") }
@@ -123,10 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "openURL":
             if let t = body["url"] as? String, let url = Self.safeLink(t) { NSWorkspace.shared.open(url) }
         case "audioReset":
+            rebuildsSinceLoad += 1
             HealthLog.write("audio reset: \(body["reason"] as? String ?? "?")")
         case "sleep":
             stopClock()
             HealthLog.write("asleep: audio suspended, clock stopped")
+            recycleIfDue()
         case "wake":
             startClock()
         case "health":
@@ -135,7 +145,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let music = ["notes", "pitches", "top", "maxRun", "range", "beats", "chats", "heard"].compactMap { k in m[k].map { "\(k)=\($0)" } }.joined(separator: " ")
             // muted=app/page (they should always agree); out = the loudest the engine got in the last 5 s, in dB
             let out = (body["out"] as? NSNumber).map { "\($0)dB" } ?? "?", pageMuted = (body["muted"] as? Bool).map { "\($0)" } ?? "?"
-            HealthLog.write("ticks/5s=\(ticks) audio=\(audio) clock=\(t) out=\(out) muted=\(muted)/\(pageMuted) style=\(currentStyle) listening=\(tap != nil) paused=\(paused) agentEvents=\(agentEvents) codex=\(codexEvents) | \(music)")
+            let page = pageMemoryMB().map { "\($0)MB" } ?? "?"
+            HealthLog.write("ticks/5s=\(ticks) audio=\(audio) clock=\(t) out=\(out) muted=\(muted)/\(pageMuted) style=\(currentStyle) listening=\(tap != nil) paused=\(paused) agentEvents=\(agentEvents) codex=\(codexEvents) page=\(page) rebuilds=\(rebuildsSinceLoad) | \(music)")
         default: break
         }
     }
@@ -165,6 +176,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
               let args = String(data: data, encoding: .utf8) else { return }
         startClock()
         js("typesongHost.key(...\(args))")
+    }
+
+    // MARK: Page upkeep
+
+    // Every audio rebuild in the page (wake, output switch, stalled clock) leaves memory behind that WebKit never
+    // returns: 6–8 MB each when measured, and one page reached 809 MB after 39 rebuilds in 9 hours. So after a few
+    // rebuilds, or once the page gets big for any reason, swap in a fresh web view (a new page process) the next
+    // time everything goes quiet with the window closed. `defaults write com.miguelmendoza.typesong
+    // recycleAfterRebuilds -int N` (or recycleAboveMB) lowers the limits for testing.
+    private var recycleAfterRebuilds: Int { let n = UserDefaults.standard.integer(forKey: "recycleAfterRebuilds"); return n > 0 ? n : 5 }
+    private var recycleAboveMB: Int { let n = UserDefaults.standard.integer(forKey: "recycleAboveMB"); return n > 0 ? n : 300 }
+
+    private func recycleIfDue() {
+        guard pageReady, !window.isVisible else { return }   // never swap the page out from under someone watching it
+        let mb = pageMemoryMB()
+        guard rebuildsSinceLoad >= recycleAfterRebuilds || (mb ?? 0) >= recycleAboveMB else { return }
+        HealthLog.write("recycling the engine page: \(rebuildsSinceLoad) audio rebuilds, page \(mb.map { "\($0) MB" } ?? "size unknown")")
+        let old = web!
+        old.navigationDelegate = nil   // its process ending is expected now, not a crash to recover from
+        old.configuration.userContentController.removeScriptMessageHandler(forName: "typesong")   // it holds self strongly
+        old.stopLoading()
+        pageReady = false
+        stopClock()
+        freshPage = true
+        web = makeWebView()
+        window.contentView = web       // the old view leaves the window and is released, which ends its process
+        loadEngine()
+    }
+
+    /// The page process's memory as Activity Monitor counts it (physical footprint), or nil if WebKit won't say
+    /// which process that is (the process ID comes from a private property, so check it still exists first).
+    private func pageMemoryMB() -> Int? {
+        let key = "_webProcessIdentifier"
+        guard let web, web.responds(to: NSSelectorFromString(key)),
+              let pid = (web.value(forKey: key) as? NSNumber)?.int32Value, pid > 0 else { return nil }
+        var info = rusage_info_v4()
+        let ok = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) == 0 }
+        }
+        return ok ? Int(info.ri_phys_footprint >> 20) : nil
     }
 
     // MARK: Agent mode

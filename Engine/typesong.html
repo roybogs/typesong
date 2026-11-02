@@ -810,23 +810,34 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
   // Audio watchdog: after the Mac sleeps, the system can leave the AudioContext "running" with a frozen clock,
   // so notes pile up on a stalled timeline (choppy, then silent). If the clock stops moving for ~3 s while it
   // should be running, rebuild the audio engine. The Mac app also calls resetAudio right after a wake.
-  let clockSeen = 0, clockWall = 0, stalls = 0, resetTimes = [], lastResetAt = -1e9;
+  // A rebuild that doesn't bring the clock back means the output itself is stuck. Every rebuild leaves memory
+  // behind in the page (6–8 MB measured), and rebuilding every 10–30 s through a stuck output helped grow one
+  // Mac app page past 800 MB, so each further try waits twice as long: 30 s, 1 min, 2 min, then every 5 min.
+  // A real change (output device, unmute, wake) rebuilds at once; a minute of running clock resets the wait.
+  let clockSeen = 0, clockWall = 0, stalls = 0, lastResetAt = -1e9, stallWait = 0, stallRetryAt = 0, clockOkSince = 0;
   const RESET_GRACE = 8000;   // one reset per wake: skip others within 8 s, and give a fresh engine time to start
   function watchClock(){
     if (!ctx || ctx.state !== 'running' || performance.now() - lastResetAt < RESET_GRACE){ clockWall = 0; stalls = 0; return; }
     const w = performance.now();
     if (!clockWall){ clockWall = w; clockSeen = ctx.currentTime; return; }
     if (w - clockWall < 1500) return;
-    stalls = ctx.currentTime - clockSeen < 0.2 ? stalls + 1 : 0;
+    const moving = ctx.currentTime - clockSeen >= 0.2;
+    stalls = moving ? 0 : stalls + 1;
     clockWall = w; clockSeen = ctx.currentTime;
-    if (stalls < 2) return;
-    resetTimes = resetTimes.filter(t => w - t < 60000);
-    if (resetTimes.length >= 3 && w - resetTimes[resetTimes.length-1] < 30000) return;   // device still dead: back off to every 30 s
-    resetTimes.push(w);
+    if (moving){
+      if (!clockOkSince) clockOkSince = w;
+      if (stallWait && w - clockOkSince > 60000){ stallWait = 0; stallRetryAt = 0; }
+      return;
+    }
+    clockOkSince = 0;
+    if (stalls < 2 || w < stallRetryAt) return;   // the last rebuild didn't help: wait out the back-off
+    stallWait = stallWait ? Math.min(stallWait*2, 300000) : 30000;
+    stallRetryAt = w + stallWait;
     resetAudio('clock stalled');
   }
   function resetAudio(reason, force){   // force: a real cause (output device changed, unmute), not a stall guess
     if (!ctx || (!force && performance.now() - lastResetAt < RESET_GRACE)) return;
+    if (reason !== 'clock stalled'){ stallWait = 0; stallRetryAt = 0; }   // something really changed: start fresh
     lastResetAt = performance.now();
     try { ctx.close(); } catch(e){}
     ctx = null; bandOn = false; bed = null; stalls = 0; clockWall = 0;
