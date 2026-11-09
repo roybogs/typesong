@@ -67,8 +67,9 @@ Monitoring** permission the first time. Quit Typesong from its menu before reins
 
 Signing: the build uses your first "Apple Development" certificate if you have one, so the permission survives
 rebuilds. Without one it signs ad hoc, and macOS asks for the permission again after each rebuild.
-`scripts/release.sh <version>` makes a notarized DMG for Apple Silicon and Intel (needs full Xcode and a Developer ID
-certificate; the script says what is missing).
+`scripts/release.sh <version>` makes a notarized DMG for Apple Silicon and Intel from the `v<version>` tag (needs full
+Xcode, a Developer ID certificate and a notarytool profile). `scripts/release.sh <version> --check` only says what is
+missing.
 
 ### Windows and Linux
 
