@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac App Store edition. The sandbox is required for the store. network.client is only there because
+	     WKWebView needs it to run its page; the page loads nothing from the web (fonts are bundled).
+	     Key capture is a listen-only event tap, which the sandbox allows once the user grants Input Monitoring.
+	     appstore.sh adds com.apple.application-identifier and com.apple.developer.team-identifier for the
+	     distribution build, from the provisioning profile. -->
+	<key>com.apple.security.app-sandbox</key><true/>
+	<key>com.apple.security.network.client</key><true/>
+</dict>
+</plist>

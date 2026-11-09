@@ -133,7 +133,7 @@ kbd{font:500 12px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;
 
 <script>
 (() => {
-  const TIP_URL = 'https://ko-fi.com/typesong';   // the tip jar (Ko-fi)
+  const TIP_URL = window.TYPESONG_STORE ? '' : 'https://ko-fi.com/typesong';   // the tip jar (Ko-fi); none in the Mac App Store edition
   const $ = id => document.getElementById(id);
   const hz = m => 440*Math.pow(2,(m-69)/12);
   const pc = m => ((m%12)+12)%12;

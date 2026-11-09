@@ -7,6 +7,15 @@ import CoreGraphics
 // WKWebView; a listen-only keyboard event tap feeds it which key was pressed and when. Nothing typed is stored,
 // logged or sent anywhere. macOS hides keystrokes in password fields (secure input) from event taps entirely.
 
+// The Mac App Store edition (built with -DAPPSTORE by scripts/appstore.sh) runs sandboxed: no tip link
+// (App Store rule 3.1.1) and no agent music (it writes ~/.claude/settings.json, reads ~/.codex and serves a
+// loopback port, none of which a sandboxed app may do).
+#if APPSTORE
+let storeEdition = true
+#else
+let storeEdition = false
+#endif
+
 let styles: [(key: String, title: String)] = [
     ("lofi", "Lofi"), ("night", "Late night"), ("ambient", "Ambient"), ("angelic", "Ethereal"),
     ("rain", "Rainfall"), ("noise", "Noise"), ("free", "Instruments"),
@@ -27,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var tipURL: URL?   // set by the engine page; the menu shows "Leave a tip" only when it exists
     private var muted = false
     private var paused = false
-    private var agentOn = UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? false   // Beta: off until chosen
+    private var agentOn = storeEdition ? false : (UserDefaults.standard.object(forKey: "agentMode") as? Bool ?? false)   // Beta: off until chosen
     private var agentServer: AgentServer?
     private var codex: CodexWatcher?
     private var agentScope = UserDefaults.standard.string(forKey: "agentScope") == "all" ? "all" : "focus"
@@ -37,13 +46,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var codexEvents = 0   // how many of those came from Codex, for the health log
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let sandboxed = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+        HealthLog.write("launch: edition=\(storeEdition ? "appstore" : "direct") sandboxed=\(sandboxed)")
         // Keep the audio clock and scheduler at full speed while the app sits in the background.
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Playing music as you type")
         buildWindow()
         buildStatusItem()
         if !selfTest { startListening() }          // the self-test never triggers the permission prompt
-        agentServer = AgentServer { [weak self] event in self?.agentEvent(event) }
-        codex = CodexWatcher { [weak self] event in self?.codexEvents += 1; self?.agentEvent(event) }
+        if !storeEdition {
+            agentServer = AgentServer { [weak self] event in self?.agentEvent(event) }
+            codex = CodexWatcher { [weak self] event in self?.codexEvents += 1; self?.agentEvent(event) }
+        }
         // After the Mac wakes, the audio clock can come back frozen; rebuild the engine's audio right away.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             HealthLog.write("mac woke: resetting audio")
@@ -62,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
         config.preferences.inactiveSchedulingPolicy = .none      // never throttle timers when the window is hidden
-        let bridge = WKUserScript(source: "window.TYPESONG_HOST='mac';", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        let bridge = WKUserScript(source: storeEdition ? "window.TYPESONG_HOST='mac';window.TYPESONG_STORE=true;" : "window.TYPESONG_HOST='mac';", injectionTime: .atDocumentStart, forMainFrameOnly: true)
         config.userContentController.addUserScript(bridge)
         config.userContentController.add(self, name: "typesong")
 
@@ -118,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "state":
             if let s = body["style"] as? String { currentStyle = s }
             if pageReady, let m = body["muted"] as? Bool { muted = m }   // while loading, the page doesn't know the app's mute yet
-            if let t = body["tipURL"] as? String { tipURL = Self.safeLink(t) }
+            if !storeEdition, let t = body["tipURL"] as? String { tipURL = Self.safeLink(t) }
             refreshIcon()
         case "openURL":
             if let t = body["url"] as? String, let url = Self.safeLink(t) { NSWorkspace.shared.open(url) }
@@ -186,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     @objc private func toggleAgent() {
+        guard !storeEdition else { return }
         agentOn.toggle()
         UserDefaults.standard.set(agentOn, forKey: "agentMode")
         if agentOn { agentServer?.start(); codex?.start() } else { agentServer?.stop(); codex?.stop() }
@@ -368,10 +382,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         mute.keyEquivalentModifierMask = [.command, .option, .control]
         menu.addItem(mute)
         menu.addItem(item(paused ? "Resume listening to my typing" : "Pause listening to my typing", #selector(togglePause)))
-        let agent = item("Agent music (Beta)", #selector(toggleAgent))
-        agent.state = agentOn ? .on : .off
-        menu.addItem(agent)
-        if agentOn {
+        if !storeEdition {
+            let agent = item("Agent music (Beta)", #selector(toggleAgent))
+            agent.state = agentOn ? .on : .off
+            menu.addItem(agent)
+        }
+        if agentOn && !storeEdition {
             let setUp = Hook.isInstalled(command: hookCommand)
             let setup = item(setUp ? "Claude Code is connected ✓" : "Connect Claude Code…", #selector(setUpClaude))
             setup.indentationLevel = 1
@@ -403,7 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(styleItem)
 
         menu.addItem(item("Show Typesong window", #selector(showWindowAction)))
-        if tipURL != nil { menu.addItem(item("Leave a tip ♥", #selector(openTip))) }
+        if !storeEdition, tipURL != nil { menu.addItem(item("Leave a tip ♥", #selector(openTip))) }
         menu.addItem(.separator())
         menu.addItem(item("Quit Typesong", #selector(quit)))
     }
@@ -549,7 +565,10 @@ enum HealthLog {
     }
 }
 
-if CommandLine.arguments.contains("--hook") { Hook.run() }   // Claude Code hook mode: no UI, exits right away
+if CommandLine.arguments.contains("--hook") {   // the store edition has no agent music, so no hook mode
+    if storeEdition { exit(0) }
+    Hook.run()
+}   // Claude Code hook mode: no UI, exits right away
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

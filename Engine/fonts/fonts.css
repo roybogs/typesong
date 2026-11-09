@@ -1,0 +1,6 @@
+/* Bundled copies of the page's Google Fonts (latin subset), for builds that load nothing from the network
+   (the Mac App Store edition). Licenses: OFL-*.txt beside this file. */
+@font-face{font-family:'Figtree';font-style:normal;font-weight:400 600;font-display:swap;src:url(figtree.woff2) format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url(ibm-plex-mono-400.woff2) format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url(ibm-plex-mono-500.woff2) format('woff2')}
+@font-face{font-family:'Unbounded';font-style:normal;font-weight:500 700;font-display:swap;src:url(unbounded.woff2) format('woff2')}

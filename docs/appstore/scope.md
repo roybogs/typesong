@@ -23,13 +23,20 @@ The DMG needs no App Store review. Notarization (already passed) is the only App
 Default: a store edition with typing music only. Agent music stays in the free DMG, where it already works.
 That keeps the review simple: no writing other apps' settings, no reading other apps' folders.
 
-## Build and upload (scriptable, scripts/appstore.sh to write)
+## Build and upload (scripts/appstore.sh, written Nov 9)
 
-1. Register the bundle ID for Mac App Store and make a "Mac App Store" provisioning profile (API key can do this).
-2. Build universal with an entitlements file (app-sandbox, network.server), embed the profile, sign with
-   "Apple Distribution: Streetside Films LLC (2UFQBR2K68)" (already in the keychain).
-3. productbuild a .pkg signed with a "Mac Installer Distribution" certificate (likely missing; one click in Xcode).
-4. Upload with the existing App Store Connect API key (App Manager role can upload builds).
+The store edition is the same source built with `TYPESONG_APPSTORE=1`: compiled with `-DAPPSTORE` (no tip link,
+no agent music, no hook mode), fonts bundled from `Engine/fonts` (OFL), sandbox entitlements from
+`scripts/Typesong-AppStore.entitlements` (app-sandbox and network.client only), Info.plist category Music and
+`ITSAppUsesNonExemptEncryption` false. The direct download build is unchanged.
+
+1. `scripts/appstore.sh --dev`: sandboxed development build, runs the self-test inside the sandbox and checks the
+   container's health log for `edition=appstore sandboxed=true`, the page load and engine ticks.
+2. Register the bundle ID for macOS and make a Mac App Store provisioning profile (the API key can do both).
+3. `TYPESONG_PROFILE=... TYPESONG_ASC_KEY_ID=... TYPESONG_ASC_ISSUER=... scripts/appstore.sh 1.0`: universal build
+   signed with Apple Distribution, profile embedded, .pkg signed with the Mac Installer Distribution certificate,
+   validated with `altool --validate-app`. Validation reports the missing app record until the app exists in
+   App Store Connect. Nothing is uploaded; the upload command is printed for after a yes.
 
 ## Only Miguel (or me in his Chrome, on his yes)
 
