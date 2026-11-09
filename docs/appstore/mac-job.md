@@ -87,11 +87,38 @@ validation error is a real problem: report Apple's full message from `build/apps
 If codesign or productbuild sits silent for over a minute, macOS is showing a keychain dialog asking to use a
 signing key: choose Always Allow.
 
+## 5. Store screenshots (local files only, nothing uploaded)
+
+Mac App Store screenshots must be 16:10 at 2880x1800 (or 2560x1600, 1440x900, 1280x800). Save them to
+`~/Documents/Typesong/appstore-media/`.
+
+a. `2-menu-bar.png`: the store edition from step 2 running (`build/Typesong.app/Contents/MacOS/Typesong &`), its
+   menu bar menu open over a writing app (TextEdit with a few lines of text). The menu must show only what the store
+   edition has: no "Agent music" and no "Leave a tip". Open the menu with System Events UI scripting if allowed; if
+   that is denied, skip this one and say so.
+b. `3-styles.png`: the Typesong window (`--show`) with a style picked, for example Rainfall.
+c. Take each with `screencapture -x`, crop to 16:10 around the subject and resize to 2880x1800 with `sips`.
+Quit the store edition afterwards (by its PID). Do not install it.
+
+## 6. Store cut of the promo video (local file only)
+
+The promo video is `~/Documents/Typesong/brag-output/brag.mp4` (23 s, 1920x1080, made Sep 26 from a code-built
+composition; `brag-plan.md` beside it says how). Find the composition source and render a store cut to
+`~/Documents/Typesong/appstore-media/app-preview.mp4` with only these changes:
+- Last scene: replace "Free · Mac · Windows · Linux · Web" with "Free for Mac" (App Store previews may not name
+  other platforms).
+- Menu bar scene: the menu must match the store edition (no "Agent music", no "Leave a tip"). If it already does,
+  leave it.
+Everything else stays as it is: scenes, timing, captions, soundtrack. Output: 1920x1080, H.264, 30 fps,
+stereo AAC, 15 to 30 seconds. Check with ffprobe and report its lines. If the composition source can't be found,
+say so and stop this step; do not rebuild the video from scratch.
+
 ## Report back
 
 - Step 2 result and the health log lines it printed.
 - What step 3 found or created: bundle ID (existing or registered), installer certificate (existing or created),
   profile name and expiry.
 - `RESULT.txt` lines, the .pkg path, and the validation outcome with Apple's exact words.
+- Paths of the screenshots and the store cut, with the video's ffprobe lines, or why a step was skipped.
 - Any commit you pushed (hash and one line).
 Do not upload, do not run the printed upload line, and do not touch App Store Connect apps.
